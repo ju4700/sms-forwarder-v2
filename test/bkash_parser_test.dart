@@ -33,4 +33,13 @@ void main() {
     expect(parsed.fee, 0);
     expect(parsed.balance, 1000);
   });
+
+  test('rejects malformed sms with invalid sender or future date', () {
+    const String sms =
+        'You have received Tk 200.00 from 12345. Ref FEROJ. Fee Tk 0.00. Balance Tk 458.97. TrxID DCI99TCKLX at 18/03/2099 21:29';
+
+    final ParsedBkashTransaction? parsed = BkashParser.parse(sms);
+
+    expect(parsed, isNull);
+  });
 }

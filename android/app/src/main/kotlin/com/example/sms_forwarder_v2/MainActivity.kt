@@ -34,8 +34,19 @@ class MainActivity : FlutterActivity() {
 		MethodChannel(flutterEngine.dartExecutor.binaryMessenger, smsBridgeChannelName)
 			.setMethodCallHandler { call, result ->
 				when (call.method) {
-					"drainCapturedSms" -> {
-						result.success(drainCapturedSms())
+					"getQueueSnapshot" -> {
+						result.success(SmsQueueStore.snapshot(this))
+					}
+
+					"retryDeadLetters" -> {
+						val count = SmsQueueStore.retryDeadLetters(this)
+						NativeWorkScheduler.triggerImmediate(this)
+						result.success(count)
+					}
+
+					"triggerNativeSync" -> {
+						NativeWorkScheduler.triggerImmediate(this)
+						result.success(true)
 					}
 
 					else -> result.notImplemented()
@@ -50,9 +61,5 @@ class MainActivity : FlutterActivity() {
 		} else {
 			startService(intent)
 		}
-	}
-
-	private fun drainCapturedSms(): List<Map<String, Any>> {
-		return SmsQueueStore.drainForFlutter(this)
 	}
 }

@@ -42,39 +42,47 @@ object SmsQueueStore {
     }
 
     fun writeQueue(context: Context, items: List<JSONObject>) {
+        val trimmed = if (items.size > maxQueueSize) {
+            items.takeLast(maxQueueSize)
+        } else {
+            items
+        }
+
         val json = JSONArray()
-        items.forEach { json.put(it) }
+        trimmed.forEach { json.put(it) }
         val prefs = context.getSharedPreferences(prefsName, Context.MODE_PRIVATE)
         prefs.edit().putString(keyQueue, json.toString()).apply()
     }
 
-    fun drainForFlutter(context: Context): List<Map<String, Any>> {
+    fun snapshot(context: Context): List<Map<String, Any>> {
         val queue = readQueue(context)
-        val drained = mutableListOf<Map<String, Any>>()
-        val keep = mutableListOf<JSONObject>()
-
-        queue.forEach { item ->
-            val status = item.optString("status", "pending")
-            if (status == "dead_letter") {
-                keep.add(item)
-                return@forEach
-            }
-
-            val body = item.optString("body", "")
-            if (body.isBlank()) {
-                return@forEach
-            }
-
-            drained.add(
-                mapOf(
-                    "sender" to item.optString("sender", ""),
-                    "body" to body,
-                    "timestamp" to item.optLong("timestamp", System.currentTimeMillis()),
-                ),
+        return queue.map { item ->
+            mapOf(
+                "sender" to item.optString("sender", ""),
+                "body" to item.optString("body", ""),
+                "timestamp" to item.optLong("timestamp", System.currentTimeMillis()),
+                "status" to item.optString("status", "pending"),
+                "attemptCount" to item.optInt("attemptCount", 0),
+                "nextRetryAt" to item.optLong("nextRetryAt", 0L),
+                "lastError" to item.optString("lastError", ""),
             )
         }
-
-        writeQueue(context, keep)
-        return drained
     }
+
+    fun retryDeadLetters(context: Context): Int {
+        val queue = readQueue(context)
+        val now = System.currentTimeMillis()
+        var retried = 0
+        queue.forEach { item ->
+            if (item.optString("status", "pending") == "dead_letter") {
+                item.put("status", "retry_scheduled")
+                item.put("nextRetryAt", now)
+                item.put("lastError", "")
+                retried += 1
+            }
+        }
+        writeQueue(context, queue)
+        return retried
+    }
+
 }

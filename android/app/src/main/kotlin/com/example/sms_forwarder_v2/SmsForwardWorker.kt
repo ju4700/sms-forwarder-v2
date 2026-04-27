@@ -8,16 +8,20 @@ import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
 import java.text.SimpleDateFormat
+import java.security.MessageDigest
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
-import kotlin.math.abs
 import kotlin.math.min
 
 class SmsForwardWorker(
     appContext: Context,
     params: WorkerParameters,
 ) : Worker(appContext, params) {
+
+    private val senderPattern = Regex("^01[3-9]\\d{8}$")
+    private val referencePattern = Regex("^[A-Z0-9][A-Z0-9 _./-]{1,31}$")
+    private val transactionPattern = Regex("^[A-Z0-9]{8,20}$")
 
     override fun doWork(): Result {
         val queue = SmsQueueStore.readQueue(applicationContext)
@@ -39,7 +43,7 @@ class SmsForwardWorker(
 
         queue.forEach { item ->
             val status = item.optString("status", "pending")
-            if (status == "dead_letter") {
+            if (status == "dead_letter" || status == "delivered") {
                 updated.add(item)
                 return@forEach
             }
@@ -68,22 +72,31 @@ class SmsForwardWorker(
                 rawSms = body,
             )
 
-            if (sent) {
+            if (sent in 200..299) {
+                item.put("status", "delivered")
+                item.put("nextRetryAt", 0L)
+                item.put("lastError", "")
+                updated.add(item)
                 return@forEach
             }
 
             val attempts = item.optInt("attemptCount", 0) + 1
-            if (attempts >= maxAttempts) {
+            if (sent in 400..499 && !isRetryableHttpStatus(sent)) {
                 item.put("attemptCount", attempts)
                 item.put("status", "dead_letter")
-                item.put("lastError", "Max attempts reached")
+                item.put("lastError", "HTTP $sent")
+                updated.add(item)
+            } else if (attempts >= maxAttempts) {
+                item.put("attemptCount", attempts)
+                item.put("status", "dead_letter")
+                item.put("lastError", if (sent == 0) "Max attempts reached" else "HTTP $sent")
                 updated.add(item)
             } else {
                 val retryAt = now + computeBackoffMs(attempts)
                 item.put("attemptCount", attempts)
                 item.put("status", "retry_scheduled")
                 item.put("nextRetryAt", retryAt)
-                item.put("lastError", "Delivery failed")
+                item.put("lastError", if (sent == 0) "Delivery failed" else "HTTP $sent")
                 updated.add(item)
                 shouldRetryWorker = true
             }
@@ -106,11 +119,32 @@ class SmsForwardWorker(
         val match = pattern.find(body) ?: return null
         val amount = match.groupValues[1].toDoubleOrNull() ?: return null
         val sender = normalizePhone(match.groupValues[2])
-        val reference = match.groupValues[3].trim()
+        val reference = cleanReference(match.groupValues[3])
         val fee = match.groupValues[4].toDoubleOrNull() ?: 0.0
         val balance = match.groupValues[5].toDoubleOrNull() ?: 0.0
         val trxId = match.groupValues[6].trim().uppercase()
         val dateText = match.groupValues[7].trim()
+
+        if (!isValidAmount(amount) || !isValidAmount(fee) || !isValidAmount(balance)) {
+            return null
+        }
+
+        if (!senderPattern.matches(sender)) {
+            return null
+        }
+
+        if (reference.isBlank() || !referencePattern.matches(reference)) {
+            return null
+        }
+
+        if (!transactionPattern.matches(trxId)) {
+            return null
+        }
+
+        val parsedDate = parseDate(dateText) ?: return null
+        if (!isSaneTimestamp(parsedDate)) {
+            return null
+        }
 
         val localIso = toLocalIso(dateText)
         val utcIso = toUtcIso(dateText)
@@ -132,8 +166,9 @@ class SmsForwardWorker(
         idempotencyKey: String,
         payload: ParsedSms,
         rawSms: String,
-    ): Boolean {
+    ): Int {
         val body = JSONObject().apply {
+            put("schemaVersion", "1.0")
             put("idempotencyKey", idempotencyKey)
             put("number", payload.sender)
             put("amount", payload.amount)
@@ -149,8 +184,8 @@ class SmsForwardWorker(
             })
         }
 
-        val url = runCatching { URL(endpoint) }.getOrNull() ?: return false
-        val connection = (url.openConnection() as? HttpURLConnection) ?: return false
+        val url = runCatching { URL(endpoint) }.getOrNull() ?: return 0
+        val connection = (url.openConnection() as? HttpURLConnection) ?: return 0
 
         return try {
             connection.requestMethod = "POST"
@@ -165,10 +200,9 @@ class SmsForwardWorker(
                 writer.flush()
             }
 
-            val code = connection.responseCode
-            code in 200..299
+            connection.responseCode
         } catch (_: Exception) {
-            false
+            0
         } finally {
             connection.disconnect()
         }
@@ -176,7 +210,12 @@ class SmsForwardWorker(
 
     private fun buildId(parsed: ParsedSms): String {
         val seed = "${parsed.trxId}|${parsed.amount}|${parsed.sender}|${parsed.localIso}"
-        return "txn-${abs(seed.hashCode())}"
+        val digest = MessageDigest.getInstance("SHA-256").digest(seed.toByteArray())
+        return digest.joinToString(separator = "") { byte -> "%02x".format(byte) }
+    }
+
+    private fun isRetryableHttpStatus(code: Int): Boolean {
+        return code == 408 || code == 425 || code == 429 || (code >= 500 && code < 600)
     }
 
     private fun normalizePhone(raw: String): String {
@@ -186,6 +225,29 @@ class SmsForwardWorker(
             digits.startsWith("88") && digits.length > 11 -> digits.substring(2)
             else -> digits
         }
+    }
+
+    private fun cleanReference(raw: String): String {
+        return raw.replace(Regex("\\s+"), " ").trim().uppercase()
+    }
+
+    private fun isValidAmount(value: Double): Boolean {
+        return value >= 0.0 && value <= 1000000.0
+    }
+
+    private fun parseDate(text: String): Date? {
+        val parser = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.US).apply {
+            timeZone = TimeZone.getTimeZone("Asia/Dhaka")
+            isLenient = false
+        }
+        return runCatching { parser.parse(text) }.getOrNull()
+    }
+
+    private fun isSaneTimestamp(value: Date): Boolean {
+        val now = Date()
+        val lower = Date(now.time - (365L * 3L * 24L * 60L * 60L * 1000L))
+        val upper = Date(now.time + (5L * 60L * 1000L))
+        return value.after(lower) && value.before(upper)
     }
 
     private fun toLocalIso(text: String): String {

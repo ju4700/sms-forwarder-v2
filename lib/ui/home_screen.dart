@@ -46,23 +46,17 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     final AppController controller = widget.controller;
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('SMS Forwarder'),
-        centerTitle: false,
-      ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: <Widget>[
-          _buildStatusCard(controller),
-          const SizedBox(height: 12),
-          _buildSettingsCard(controller),
-          const SizedBox(height: 12),
-          _buildQueueStats(controller),
-          const SizedBox(height: 12),
-          _buildHistory(controller.history),
-        ],
-      ),
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: <Widget>[
+        _buildStatusCard(controller),
+        const SizedBox(height: 12),
+        _buildSettingsCard(controller),
+        const SizedBox(height: 12),
+        _buildQueueStats(controller),
+        const SizedBox(height: 12),
+        _buildHistory(controller.history),
+      ],
     );
   }
 

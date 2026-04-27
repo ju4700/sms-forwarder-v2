@@ -27,6 +27,10 @@ class ParsedBkashTransaction {
 }
 
 class BkashParser {
+  static final RegExp _senderPattern = RegExp(r'^01[3-9]\d{8}$');
+  static final RegExp _referencePattern = RegExp(r'^[A-Z0-9][A-Z0-9 _./-]{1,31}$');
+  static final RegExp _transactionPattern = RegExp(r'^[A-Z0-9]{8,20}$');
+
   static final List<RegExp> _patterns = <RegExp>[
     RegExp(
       r'You\s+have\s+received\s+(?:Tk|BDT|৳)\s*([0-9]+(?:\.[0-9]{1,2})?)\s+from\s+([0-9+]+)\.?\s*(?:Ref|Reference)\s+([^\.]+)\.?\s*Fee\s+(?:Tk|BDT|৳)\s*([0-9]+(?:\.[0-9]{1,2})?)\.?\s*Balance\s+(?:Tk|BDT|৳)\s*([0-9]+(?:\.[0-9]{1,2})?)\.?\s*(?:TrxID|Transaction\s*ID)\s+([A-Z0-9]+)\s+at\s+([0-9]{1,2}/[0-9]{1,2}/[0-9]{4}\s+[0-9]{1,2}:[0-9]{2})',
@@ -67,7 +71,7 @@ class BkashParser {
 
     final double? amount = _toAmount(match.group(1));
     final String sender = _normalizePhone(match.group(2) ?? '');
-    final String reference = (match.groupCount >= 3 ? match.group(3) : '')?.trim() ?? '';
+    final String reference = _cleanReference((match.groupCount >= 3 ? match.group(3) : '') ?? '');
     final double? fee = _toAmount(match.groupCount >= 4 ? match.group(4) : '0');
     final double? balance = _toAmount(match.groupCount >= 5 ? match.group(5) : '0');
     final String trxId = (match.groupCount >= 6 ? match.group(6) : '')?.trim().toUpperCase() ?? '';
@@ -77,19 +81,34 @@ class BkashParser {
       return null;
     }
 
-    final DateTime? parsed = dateText.isEmpty ? null : _parseDateTime(dateText);
-    final DateTime local = parsed ?? DateTime.now();
-    final DateTime utc = local.toUtc();
-
-    final String resolvedTrxId = trxId.isEmpty ? _fallbackTrx(body) : trxId;
-    if (resolvedTrxId.isEmpty) {
+    if (!_isValidAmount(amount) || !_isValidAmount(fee) || !_isValidAmount(balance)) {
       return null;
     }
+
+    if (!_senderPattern.hasMatch(sender)) {
+      return null;
+    }
+
+    if (reference.isEmpty || !_referencePattern.hasMatch(reference)) {
+      return null;
+    }
+
+    if (!_transactionPattern.hasMatch(trxId)) {
+      return null;
+    }
+
+    final DateTime? parsed = dateText.isEmpty ? null : _parseDateTime(dateText);
+    if (parsed == null || !_isSaneTimestamp(parsed)) {
+      return null;
+    }
+
+    final DateTime local = parsed;
+    final DateTime utc = local.toUtc();
 
     return ParsedBkashTransaction(
       sender: sender,
       amount: amount,
-      transactionId: resolvedTrxId,
+      transactionId: trxId,
       reference: reference,
       fee: fee,
       balance: balance,
@@ -127,13 +146,22 @@ class BkashParser {
     return digitsOnly;
   }
 
-  static String _fallbackTrx(String body) {
-    final RegExp trxPattern = RegExp(r'(?:TrxID|Transaction\s*ID)\s+([A-Z0-9]+)', caseSensitive: false);
-    final Match? match = trxPattern.firstMatch(body);
-    if (match == null) {
-      return '';
-    }
-    return (match.group(1) ?? '').trim().toUpperCase();
+  static String _cleanReference(String raw) {
+    return raw
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim()
+        .toUpperCase();
+  }
+
+  static bool _isValidAmount(double value) {
+    return value >= 0 && value <= 1000000;
+  }
+
+  static bool _isSaneTimestamp(DateTime value) {
+    final DateTime now = DateTime.now();
+    final DateTime lowerBound = now.subtract(const Duration(days: 365 * 3));
+    final DateTime upperBound = now.add(const Duration(minutes: 5));
+    return value.isAfter(lowerBound) && value.isBefore(upperBound);
   }
 
   static double _confidenceFor({required String reference}) {

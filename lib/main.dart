@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'core/app_controller.dart';
-import 'ui/home_screen.dart';
+import 'ui/app_shell.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -80,7 +80,7 @@ class SmsForwarderApp extends StatelessWidget {
           ),
         ),
       ),
-      home: HomeScreen(controller: controller),
+      home: AppShell(controller: controller),
     );
   }
 }
