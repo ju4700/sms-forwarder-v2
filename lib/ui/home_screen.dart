@@ -14,6 +14,8 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   late final TextEditingController _endpointController;
+  static const Color _electricBlue = Color(0xFF009BFF);
+  static const Color _cardBorder = Color(0xFFD8ECFF);
 
   @override
   void initState() {
@@ -68,8 +70,9 @@ class _HomeScreenState extends State<HomeScreen> {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.blue.shade50,
-        border: Border.all(color: Colors.blue.shade200),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: _cardBorder),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -77,7 +80,7 @@ class _HomeScreenState extends State<HomeScreen> {
           Text(
             'Status',
             style: TextStyle(
-              color: Colors.blue.shade900,
+              color: _electricBlue,
               fontSize: 16,
               fontWeight: FontWeight.w700,
             ),
@@ -100,7 +103,8 @@ class _HomeScreenState extends State<HomeScreen> {
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.white,
-        border: Border.all(color: Colors.blue.shade200),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: _cardBorder),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -108,7 +112,7 @@ class _HomeScreenState extends State<HomeScreen> {
           Text(
             'Delivery Settings',
             style: TextStyle(
-              color: Colors.blue.shade900,
+              color: _electricBlue,
               fontWeight: FontWeight.w700,
             ),
           ),
@@ -138,9 +142,14 @@ class _HomeScreenState extends State<HomeScreen> {
             onChanged: controller.setForegroundMode,
           ),
           const SizedBox(height: 6),
-          OutlinedButton(
-            onPressed: controller.retryFailed,
-            child: const Text('Retry Failed and Sync Now'),
+          Center(
+            child: SizedBox(
+              width: 220,
+              child: OutlinedButton(
+                onPressed: controller.retryFailed,
+                child: const Text('Retry Failed and Sync Now'),
+              ),
+            ),
           ),
         ],
       ),
@@ -155,8 +164,9 @@ class _HomeScreenState extends State<HomeScreen> {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.blue.shade50,
-        border: Border.all(color: Colors.blue.shade200),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: _cardBorder),
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -175,7 +185,7 @@ class _HomeScreenState extends State<HomeScreen> {
         Text(
           '$value',
           style: TextStyle(
-            color: Colors.blue.shade900,
+            color: _electricBlue,
             fontSize: 24,
             fontWeight: FontWeight.w700,
           ),
@@ -198,18 +208,30 @@ class _HomeScreenState extends State<HomeScreen> {
 
     return Container(
       decoration: BoxDecoration(
-        border: Border.all(color: Colors.blue.shade200),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: _cardBorder),
       ),
       child: Column(
         children: history.take(20).map((QueuedSms item) {
           return ListTile(
             dense: true,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(6),
+            ),
             title: Text('Tk ${item.amount.toStringAsFixed(2)} - ${item.reference}'),
             subtitle: Text(
               '${item.sender} | TrxID ${item.transactionId}\n${item.transactionLocalTime}',
             ),
             isThreeLine: true,
-            trailing: Text(item.status),
+            trailing: Chip(
+              label: Text(item.status),
+              backgroundColor: const Color(0xFFEAF6FF),
+              side: BorderSide.none,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(6),
+              ),
+            ),
           );
         }).toList(),
       ),
