@@ -16,6 +16,7 @@ class _HomeScreenState extends State<HomeScreen> {
   late final TextEditingController _endpointController;
   static const Color _electricBlue = Color(0xFF009BFF);
   static const Color _cardBorder = Color(0xFFD8ECFF);
+  bool _retrying = false;
 
   @override
   void initState() {
@@ -87,6 +88,21 @@ class _HomeScreenState extends State<HomeScreen> {
                 ? 'SMS permission: granted'
                 : 'SMS permission: not granted',
           ),
+          const SizedBox(height: 8),
+          Text(
+            controller.isDefaultSmsApp
+                ? 'Default SMS app: enabled'
+                : 'Default SMS app: not set',
+          ),
+          const SizedBox(height: 8),
+          if (!controller.isDefaultSmsApp)
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton(
+                onPressed: controller.requestDefaultSmsRole,
+                child: const Text('Set as Default SMS App'),
+              ),
+            ),
         ],
       ),
     );
@@ -140,8 +156,25 @@ class _HomeScreenState extends State<HomeScreen> {
             child: SizedBox(
               width: 220,
               child: OutlinedButton(
-                onPressed: controller.retryFailed,
-                child: const Text('Retry Failed and Sync Now'),
+                onPressed: _retrying
+                    ? null
+                    : () async {
+                        setState(() => _retrying = true);
+                        try {
+                          await controller.retryFailed();
+                        } catch (_) {
+                          // controller.retryFailed is guarded, but protect UI anyway
+                        } finally {
+                          if (mounted) setState(() => _retrying = false);
+                        }
+                      },
+                child: _retrying
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Text('Retry Failed and Sync Now'),
               ),
             ),
           ),

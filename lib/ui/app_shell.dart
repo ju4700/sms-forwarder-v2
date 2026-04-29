@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../core/app_controller.dart';
 import 'home_screen.dart';
 import 'logs_screen.dart';
+import 'messages/messages_screen.dart';
 import 'policy_screen.dart';
 
 class AppShell extends StatefulWidget {
@@ -19,6 +20,7 @@ class _AppShellState extends State<AppShell> {
 
   static const List<String> _titles = <String>[
     'SMS Forwarder',
+    'Messages',
     'Logs',
     'Policy',
   ];
@@ -37,6 +39,7 @@ class _AppShellState extends State<AppShell> {
             index: _index,
             children: <Widget>[
               HomeScreen(controller: widget.controller),
+              MessagesScreen(controller: widget.controller),
               LogsScreen(controller: widget.controller),
               const PolicyScreen(),
             ],
@@ -53,6 +56,11 @@ class _AppShellState extends State<AppShell> {
                 icon: Icon(Icons.home_outlined),
                 selectedIcon: Icon(Icons.home),
                 label: 'Home',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.forum_outlined),
+                selectedIcon: Icon(Icons.forum),
+                label: 'Messages',
               ),
               NavigationDestination(
                 icon: Icon(Icons.receipt_long_outlined),

@@ -33,6 +33,7 @@ class SettingsService {
   static const String _kApiEndpoint = 'api_endpoint';
   static const String _kForegroundMode = 'foreground_mode';
   static const String _kMaxAttempts = 'max_attempts';
+  static const String _kInboxImported = 'inbox_imported';
 
   Future<AppSettings> load() async {
     final SharedPreferences prefs = await SharedPreferences.getInstance();
@@ -48,5 +49,15 @@ class SettingsService {
     await prefs.setString(_kApiEndpoint, settings.apiEndpoint.trim());
     await prefs.setBool(_kForegroundMode, settings.foregroundReliabilityMode);
     await prefs.setInt(_kMaxAttempts, settings.maxAttempts);
+  }
+
+  Future<bool> hasImportedInbox() async {
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_kInboxImported) ?? false;
+  }
+
+  Future<void> markInboxImported() async {
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_kInboxImported, true);
   }
 }

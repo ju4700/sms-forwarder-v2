@@ -18,10 +18,22 @@ class ForegroundServiceController {
   }
 
   Future<void> start() async {
-    await _channel.invokeMethod<bool>('start');
+    try {
+      await _channel.invokeMethod<bool>('start');
+    } catch (e) {
+      // ignore native errors
+      // ignore: avoid_print
+      print('foreground_service: start failed: $e');
+    }
   }
 
   Future<void> stop() async {
-    await _channel.invokeMethod<bool>('stop');
+    try {
+      await _channel.invokeMethod<bool>('stop');
+    } catch (e) {
+      // ignore native errors
+      // ignore: avoid_print
+      print('foreground_service: stop failed: $e');
+    }
   }
 }

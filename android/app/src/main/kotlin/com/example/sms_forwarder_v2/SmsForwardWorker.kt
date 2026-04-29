@@ -1,6 +1,7 @@
 package com.example.sms_forwarder_v2
 
 import android.content.Context
+import android.util.Log
 import androidx.work.Worker
 import androidx.work.WorkerParameters
 import org.json.JSONObject
@@ -24,91 +25,196 @@ class SmsForwardWorker(
     private val transactionPattern = Regex("^[A-Z0-9]{8,20}$")
 
     override fun doWork(): Result {
-        val queue = SmsQueueStore.readQueue(applicationContext)
-        if (queue.isEmpty()) {
-            return Result.success()
+        return try {
+            Log.d("SmsForwardWorker", "doWork started, attempt ${runAttemptCount + 1}")
+            
+            val queue = runCatching { SmsQueueStore.readQueue(applicationContext) }.getOrElse { 
+                Log.w("SmsForwardWorker", "Failed to read queue, returning empty")
+                emptyList()
+            }
+            if (queue.isEmpty()) {
+                Log.d("SmsForwardWorker", "Queue is empty, finishing")
+                return Result.success()
+            }
+
+            val prefs = runCatching {
+                applicationContext.getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+            }.getOrNull()
+            
+            val endpoint = prefs?.getString("flutter.api_endpoint", "")?.trim().orEmpty()
+            val maxAttempts = prefs?.getInt("flutter.max_attempts", 12) ?: 12
+
+            val rulesJson = prefs?.getString("flutter.capture_rules_json", "[]") ?: "[]"
+
+            if (endpoint.isBlank()) {
+                Log.w("SmsForwardWorker", "No endpoint configured, skipping delivery")
+                return Result.success()
+            }
+            Log.d("SmsForwardWorker", "Processing ${queue.size} items, max retries=$maxAttempts")
+
+            val now = System.currentTimeMillis()
+            val updated = mutableListOf<JSONObject>()
+            var shouldRetryWorker = false
+            var processedCount = 0
+            var deliveredCount = 0
+
+            queue.forEach { item ->
+                try {
+                    val status = item.optString("status", "pending")
+                    if (status == "dead_letter" || status == "delivered") {
+                        updated.add(item)
+                        return@forEach
+                    }
+
+                    val shouldForward = item.optBoolean("forward", false) ||
+                        ruleMatches(rulesJson, item.optString("sender", ""), item.optString("body", ""))
+                    if (!shouldForward) {
+                        item.put("status", "captured")
+                        updated.add(item)
+                        return@forEach
+                    }
+
+                    val nextRetryAt = item.optLong("nextRetryAt", 0L)
+                    if (nextRetryAt > now) {
+                        updated.add(item)
+                        shouldRetryWorker = true
+                        return@forEach
+                    }
+
+                    val body = item.optString("body", "")
+                    val parsed = parseBkash(body)
+                    if (parsed == null) {
+                        Log.w("SmsForwardWorker", "Failed to parse bKash from SMS")
+                        item.put("status", "dead_letter")
+                        item.put("lastError", "Parser could not match bKash template")
+                        updated.add(item)
+                        return@forEach
+                    }
+
+                    val idempotencyKey = buildId(parsed)
+                    Log.d("SmsForwardWorker", "Sending trx ${parsed.trxId}")
+                    val sent = sendPayload(
+                        endpoint = endpoint,
+                        idempotencyKey = idempotencyKey,
+                        payload = parsed,
+                        rawSms = body,
+                    )
+
+                    if (sent in 200..299) {
+                        Log.i("SmsForwardWorker", "Delivered ${parsed.trxId}")
+                        item.put("status", "delivered")
+                        item.put("nextRetryAt", 0L)
+                        item.put("lastError", "")
+                        updated.add(item)
+                        deliveredCount++
+                        return@forEach
+                    }
+
+                    val attempts = item.optInt("attemptCount", 0) + 1
+                    if (sent in 400..499 && !isRetryableHttpStatus(sent)) {
+                        Log.w("SmsForwardWorker", "Non-retryable HTTP $sent, dead-lettering")
+                        item.put("attemptCount", attempts)
+                        item.put("status", "dead_letter")
+                        item.put("lastError", "HTTP $sent")
+                        updated.add(item)
+                    } else if (attempts >= maxAttempts) {
+                        Log.w("SmsForwardWorker", "Max attempts reached, dead-lettering")
+                        item.put("attemptCount", attempts)
+                        item.put("status", "dead_letter")
+                        item.put("lastError", if (sent == 0) "Max attempts reached" else "HTTP $sent")
+                        updated.add(item)
+                    } else {
+                        val retryAt = now + computeBackoffMs(attempts)
+                        Log.d("SmsForwardWorker", "Scheduled retry $attempts/$maxAttempts")
+                        item.put("attemptCount", attempts)
+                        item.put("status", "retry_scheduled")
+                        item.put("nextRetryAt", retryAt)
+                        item.put("lastError", if (sent == 0) "Delivery failed" else "HTTP $sent")
+                        updated.add(item)
+                        shouldRetryWorker = true
+                    }
+                    processedCount++
+                } catch (e: Exception) {
+                    Log.e("SmsForwardWorker", "Error processing item: ${e.message}", e)
+                    // Mark bad item as dead_letter to prevent infinite loop
+                    try {
+                        item.put("status", "dead_letter")
+                        item.put("lastError", "Processing error: ${e.message}")
+                    } catch (_: Exception) {}
+                    updated.add(item)
+                }
+            }
+
+            runCatching { SmsQueueStore.writeQueue(applicationContext, updated) }
+                .onFailure { e -> Log.e("SmsForwardWorker", "Failed to write queue: ${e.message}", e) }
+
+            if (shouldRetryWorker) {
+                Log.d("SmsForwardWorker", "Scheduling immediate retry")
+                runCatching { NativeWorkScheduler.triggerImmediate(applicationContext) }
+                    .onFailure { e -> Log.e("SmsForwardWorker", "Failed to trigger: ${e.message}", e) }
+            }
+
+            Log.i("SmsForwardWorker", "Finished: processed=$processedCount, delivered=$deliveredCount")
+            Result.success()
+        } catch (e: Exception) {
+            Log.e("SmsForwardWorker", "Unhandled error in doWork: ${e.message}", e)
+            Result.retry()
+        }
+    }
+
+    private fun ruleMatches(raw: String, sender: String, body: String): Boolean {
+        val json = runCatching { org.json.JSONArray(raw) }.getOrElse { org.json.JSONArray() }
+        if (json.length() == 0) {
+            return false
+        }
+        val lowerBody = body.lowercase()
+        for (i in 0 until json.length()) {
+            val rule = json.optJSONObject(i) ?: continue
+            if (!rule.optBoolean("enabled", true)) {
+                continue
+            }
+
+            val type = rule.optString("type", "")
+            if (type == "template") {
+                val key = rule.optString("templateKey", "")
+                if (templateMatches(key, lowerBody)) {
+                    return true
+                }
+                continue
+            }
+
+            if (type == "regex") {
+                val senderPattern = rule.optString("senderPattern", "")
+                val bodyPattern = rule.optString("bodyPattern", "")
+
+                val senderOk = if (senderPattern.isNotBlank()) {
+                    Regex(senderPattern, RegexOption.IGNORE_CASE).containsMatchIn(sender)
+                } else {
+                    true
+                }
+
+                val bodyOk = if (bodyPattern.isNotBlank()) {
+                    Regex(bodyPattern, RegexOption.IGNORE_CASE).containsMatchIn(body)
+                } else {
+                    true
+                }
+
+                if (senderOk && bodyOk) {
+                    return true
+                }
+            }
         }
 
-        val prefs = applicationContext.getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
-        val endpoint = prefs.getString("flutter.api_endpoint", "")?.trim().orEmpty()
-        val maxAttempts = prefs.getInt("flutter.max_attempts", 12)
+        return false
+    }
 
-        if (endpoint.isBlank()) {
-            return Result.retry()
+    private fun templateMatches(key: String, lowerBody: String): Boolean {
+        return when (key.lowercase()) {
+            "bkash" -> lowerBody.contains("trxid") && lowerBody.contains("balance")
+            "rocket" -> lowerBody.contains("rocket") || lowerBody.contains("cash in")
+            "dbbl" -> lowerBody.contains("dbbl") || lowerBody.contains("transaction")
+            else -> false
         }
-
-        val now = System.currentTimeMillis()
-        val updated = mutableListOf<JSONObject>()
-        var shouldRetryWorker = false
-
-        queue.forEach { item ->
-            val status = item.optString("status", "pending")
-            if (status == "dead_letter" || status == "delivered") {
-                updated.add(item)
-                return@forEach
-            }
-
-            val nextRetryAt = item.optLong("nextRetryAt", 0L)
-            if (nextRetryAt > now) {
-                updated.add(item)
-                shouldRetryWorker = true
-                return@forEach
-            }
-
-            val body = item.optString("body", "")
-            val parsed = parseBkash(body)
-            if (parsed == null) {
-                item.put("status", "dead_letter")
-                item.put("lastError", "Parser could not match bKash template")
-                updated.add(item)
-                return@forEach
-            }
-
-            val idempotencyKey = buildId(parsed)
-            val sent = sendPayload(
-                endpoint = endpoint,
-                idempotencyKey = idempotencyKey,
-                payload = parsed,
-                rawSms = body,
-            )
-
-            if (sent in 200..299) {
-                item.put("status", "delivered")
-                item.put("nextRetryAt", 0L)
-                item.put("lastError", "")
-                updated.add(item)
-                return@forEach
-            }
-
-            val attempts = item.optInt("attemptCount", 0) + 1
-            if (sent in 400..499 && !isRetryableHttpStatus(sent)) {
-                item.put("attemptCount", attempts)
-                item.put("status", "dead_letter")
-                item.put("lastError", "HTTP $sent")
-                updated.add(item)
-            } else if (attempts >= maxAttempts) {
-                item.put("attemptCount", attempts)
-                item.put("status", "dead_letter")
-                item.put("lastError", if (sent == 0) "Max attempts reached" else "HTTP $sent")
-                updated.add(item)
-            } else {
-                val retryAt = now + computeBackoffMs(attempts)
-                item.put("attemptCount", attempts)
-                item.put("status", "retry_scheduled")
-                item.put("nextRetryAt", retryAt)
-                item.put("lastError", if (sent == 0) "Delivery failed" else "HTTP $sent")
-                updated.add(item)
-                shouldRetryWorker = true
-            }
-        }
-
-        SmsQueueStore.writeQueue(applicationContext, updated)
-
-        if (shouldRetryWorker) {
-            NativeWorkScheduler.triggerImmediate(applicationContext)
-        }
-
-        return Result.success()
     }
 
     private fun parseBkash(body: String): ParsedSms? {

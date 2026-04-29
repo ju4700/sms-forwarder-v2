@@ -32,13 +32,20 @@ dependencies:
     sdk: flutter
   cupertino_icons: ^1.0.8
   connectivity_plus: ^6.1.5
+  drift: ^2.22.0
+  google_fonts: ^6.2.1
   shared_preferences: ^2.5.3
   intl: ^0.20.2
+  path: ^1.9.0
+  path_provider: ^2.1.5
   permission_handler: ^11.4.0
+  sqlite3_flutter_libs: ^0.5.26
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
+  build_runner: ^2.4.12
+  drift_dev: ^2.22.0
 
   # The "flutter_lints" package below contains a set of recommended lints to
   # encourage good coding practices. The lint set provided by the package is

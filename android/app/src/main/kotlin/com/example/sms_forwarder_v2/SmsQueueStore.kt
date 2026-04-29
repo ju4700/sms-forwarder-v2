@@ -9,7 +9,7 @@ object SmsQueueStore {
     private const val keyQueue = "captured_sms_queue"
     private const val maxQueueSize = 300
 
-    fun enqueue(context: Context, sender: String, body: String, timestamp: Long) {
+    fun enqueue(context: Context, sender: String, body: String, timestamp: Long, shouldForward: Boolean) {
         val queue = readQueue(context)
         val item = JSONObject().apply {
             put("sender", sender)
@@ -17,7 +17,8 @@ object SmsQueueStore {
             put("timestamp", timestamp)
             put("attemptCount", 0)
             put("nextRetryAt", 0L)
-            put("status", "pending")
+            put("status", if (shouldForward) "pending" else "captured")
+            put("forward", shouldForward)
         }
         queue.add(item)
 
@@ -50,8 +51,12 @@ object SmsQueueStore {
 
         val json = JSONArray()
         trimmed.forEach { json.put(it) }
-        val prefs = context.getSharedPreferences(prefsName, Context.MODE_PRIVATE)
-        prefs.edit().putString(keyQueue, json.toString()).apply()
+        try {
+            val prefs = context.getSharedPreferences(prefsName, Context.MODE_PRIVATE)
+            prefs.edit().putString(keyQueue, json.toString()).apply()
+        } catch (e: Exception) {
+            android.util.Log.e("SmsQueueStore", "Failed to write queue", e)
+        }
     }
 
     fun snapshot(context: Context): List<Map<String, Any>> {
@@ -65,6 +70,7 @@ object SmsQueueStore {
                 "attemptCount" to item.optInt("attemptCount", 0),
                 "nextRetryAt" to item.optLong("nextRetryAt", 0L),
                 "lastError" to item.optString("lastError", ""),
+                "forward" to item.optBoolean("forward", false),
             )
         }
     }
