@@ -30,5 +30,10 @@ void main() {
 
     expect(find.text('Policy'), findsWidgets);
     expect(find.textContaining('monitors incoming transaction SMS'), findsOneWidget);
+
+    controller.dispose();
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 1));
   });
 }

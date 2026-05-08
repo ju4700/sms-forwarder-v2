@@ -84,11 +84,38 @@ object SmsQueueStore {
                 item.put("status", "retry_scheduled")
                 item.put("nextRetryAt", now)
                 item.put("lastError", "")
+                item.put("forward", true)
                 retried += 1
             }
         }
         writeQueue(context, queue)
         return retried
+    }
+
+    fun retrySingle(context: Context, sender: String, body: String, timestamp: Long): Boolean {
+        val queue = readQueue(context)
+        val now = System.currentTimeMillis()
+        var updated = false
+        queue.forEach { item ->
+            if (updated) {
+                return@forEach
+            }
+            val itemSender = item.optString("sender", "")
+            val itemBody = item.optString("body", "")
+            val itemTimestamp = item.optLong("timestamp", 0L)
+            if (itemSender == sender && itemBody == body && itemTimestamp == timestamp) {
+                item.put("status", "retry_scheduled")
+                item.put("nextRetryAt", now)
+                item.put("lastError", "")
+                item.put("forward", true)
+                updated = true
+            }
+        }
+
+        if (updated) {
+            writeQueue(context, queue)
+        }
+        return updated
     }
 
 }

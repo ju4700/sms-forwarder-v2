@@ -115,7 +115,7 @@ class RulesScreen extends StatelessWidget {
               ),
               Switch(
                 value: rule.enabled,
-                activeColor: _electricBlue,
+                activeThumbColor: _electricBlue,
                 onChanged: (bool value) async {
                   await controller.messageStore.updateRule(
                     id: rule.id,
@@ -207,7 +207,7 @@ class RulesScreen extends StatelessWidget {
               ),
               const SizedBox(height: 12),
               DropdownButtonFormField<String>(
-                value: type,
+                initialValue: type,
                 decoration: const InputDecoration(labelText: 'Rule type'),
                 items: const <DropdownMenuItem<String>>[
                   DropdownMenuItem(value: 'template', child: Text('Template')),
@@ -222,7 +222,7 @@ class RulesScreen extends StatelessWidget {
               const SizedBox(height: 12),
               if (type == 'template')
                 DropdownButtonFormField<String>(
-                  value: templateKey,
+                  initialValue: templateKey,
                   decoration: const InputDecoration(labelText: 'Template'),
                   items: const <DropdownMenuItem<String>>[
                     DropdownMenuItem(value: 'bkash', child: Text('bKash')),

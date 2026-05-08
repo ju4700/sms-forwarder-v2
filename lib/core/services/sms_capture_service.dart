@@ -63,6 +63,25 @@ class SmsCaptureService {
     }
   }
 
+  Future<bool> retrySingle({
+    required String sender,
+    required String body,
+    required int timestamp,
+  }) async {
+    try {
+      return await _channel.invokeMethod<bool>('retrySingle', <String, dynamic>{
+            'sender': sender,
+            'body': body,
+            'timestamp': timestamp,
+          }) ??
+          false;
+    } catch (e) {
+      // ignore: avoid_print
+      print('sms_capture_service: retrySingle failed: $e');
+      return false;
+    }
+  }
+
   Future<void> triggerNativeSync() async {
     try {
       await _channel.invokeMethod<bool>('triggerNativeSync');

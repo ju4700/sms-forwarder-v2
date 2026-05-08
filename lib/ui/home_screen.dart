@@ -241,6 +241,7 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       child: Column(
         children: history.take(20).map((QueuedSms item) {
+          final bool isFailed = item.status == 'dead_letter';
           return ListTile(
             dense: true,
             shape: RoundedRectangleBorder(
@@ -251,13 +252,25 @@ class _HomeScreenState extends State<HomeScreen> {
               '${item.sender} | TrxID ${item.transactionId}\n${item.transactionLocalTime}',
             ),
             isThreeLine: true,
-            trailing: Chip(
-              label: Text(item.status),
-              backgroundColor: const Color(0xFFEAF6FF),
-              side: BorderSide.none,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(6),
-              ),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                Chip(
+                  label: Text(item.status),
+                  backgroundColor: const Color(0xFFEAF6FF),
+                  side: BorderSide.none,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                ),
+                if (isFailed) ...<Widget>[
+                  const SizedBox(width: 8),
+                  OutlinedButton(
+                    onPressed: () => widget.controller.retrySingle(item),
+                    child: const Text('Send'),
+                  ),
+                ],
+              ],
             ),
           );
         }).toList(),

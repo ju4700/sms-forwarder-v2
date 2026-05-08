@@ -30,6 +30,7 @@ class AppController extends ChangeNotifier {
   List<QueuedSms> _history = <QueuedSms>[];
   StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
   Timer? _nativeDrainTimer;
+  Timer? _inboxRefreshTimer;
 
   AppSettings get settings => _settings;
   bool get ready => _ready;
@@ -130,6 +131,7 @@ class AppController extends ChangeNotifier {
       if (_permissionsGranted) {
         await _importInboxOnce();
         await _syncRulesToNative();
+        _startInboxRefreshTimer();
       }
 
       // Refresh history with error handling
@@ -198,6 +200,7 @@ class AppController extends ChangeNotifier {
     _status = 'Retrying queued messages';
     notifyListeners();
     try {
+      await _syncRulesToNative();
       await _smsCaptureService.retryDeadLetters();
       await _smsCaptureService.triggerNativeSync();
       await _refreshHistoryFromNative();
@@ -208,11 +211,33 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> retrySingle(QueuedSms item) async {
+    _status = 'Retrying message';
+    notifyListeners();
+    try {
+      await _syncRulesToNative();
+      await _smsCaptureService.retrySingle(
+        sender: item.sender,
+        body: item.messageBody,
+        timestamp: item.createdAt,
+      );
+      await _smsCaptureService.triggerNativeSync();
+      await _refreshHistoryFromNative();
+      _status = 'Retry triggered';
+    } catch (e) {
+      _status = 'Retry failed: ${e.toString()}';
+    }
+    notifyListeners();
+  }
+
   Future<void> _refreshHistoryFromNative() async {
     try {
       final List<Map<String, dynamic>> snapshot = await _smsCaptureService.fetchQueueSnapshot();
       await _persistSnapshotToMessageStore(snapshot);
-      _history = snapshot
+      final List<Map<String, dynamic>> forwardRows = snapshot
+          .where((Map<String, dynamic> row) => row['forward'] == true)
+          .toList(growable: false);
+      _history = forwardRows
           .map(_mapNativeRowToQueuedSms)
           .toList(growable: false)
         ..sort((QueuedSms a, QueuedSms b) => b.createdAt.compareTo(a.createdAt));
@@ -298,6 +323,58 @@ class AppController extends ChangeNotifier {
     }
   }
 
+  void _startInboxRefreshTimer() {
+    _inboxRefreshTimer?.cancel();
+    _inboxRefreshTimer = Timer.periodic(const Duration(seconds: 45), (Timer _) async {
+      await _refreshInbox();
+    });
+  }
+
+  Future<void> _refreshInbox() async {
+    try {
+      if (!_permissionsGranted) {
+        return;
+      }
+
+      final List<Map<String, dynamic>> rows = await _smsCaptureService.importSmsInbox(limit: 200);
+      if (rows.isEmpty) {
+        return;
+      }
+
+      await _messageStore.transaction(() async {
+        for (final Map<String, dynamic> row in rows) {
+          final String sender = (row['address'] as String? ?? '').trim();
+          final String body = (row['body'] as String? ?? '').trim();
+          final int timestamp = _asEpochMs(row['timestamp']);
+          final bool incoming = (row['isIncoming'] as bool?) ?? true;
+
+          if (sender.isEmpty || body.isEmpty) {
+            continue;
+          }
+
+          if (incoming) {
+            await _messageStore.insertIncomingIfMissing(
+              address: sender,
+              body: body,
+              timestamp: timestamp,
+              status: 'received',
+            );
+          } else {
+            await _messageStore.insertOutgoingMessage(
+              address: sender,
+              body: body,
+              timestamp: timestamp,
+              status: 'sent',
+            );
+          }
+        }
+      });
+    } catch (e) {
+      // ignore: avoid_print
+      print('app_controller: refresh inbox failed: $e');
+    }
+  }
+
   Future<void> _syncRulesToNative() async {
     try {
       final String json = await _messageStore.exportRulesJson();
@@ -312,9 +389,13 @@ class AppController extends ChangeNotifier {
     await _syncRulesToNative();
   }
 
+
   QueuedSms _mapNativeRowToQueuedSms(Map<String, dynamic> row) {
     final String body = (row['body'] as String? ?? '').trim();
-    final ParsedBkashTransaction? parsed = BkashParser.parse(body);
+    final ParsedBkashTransaction? parsed = BkashParser.parse(
+      body,
+      fallbackSender: row['sender'] as String?,
+    );
     final int createdAt = _asEpochMs(row['timestamp']);
     final int nextRetryAt = _asEpochMs(row['nextRetryAt']);
     final int attemptCount = _asInt(row['attemptCount']);
@@ -390,6 +471,7 @@ class AppController extends ChangeNotifier {
   void dispose() {
     _nativeDrainTimer?.cancel();
     _connectivitySub?.cancel();
+    _inboxRefreshTimer?.cancel();
     _messageStore.close();
     super.dispose();
   }

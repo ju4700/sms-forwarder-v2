@@ -74,6 +74,25 @@ class MainActivity : FlutterActivity() {
 						}
 					}
 
+					"retrySingle" -> {
+						try {
+							val sender = call.argument<String>("sender")?.trim().orEmpty()
+							val body = call.argument<String>("body")?.trim().orEmpty()
+							val timestamp = call.argument<Long>("timestamp") ?: 0L
+							if (sender.isBlank() || body.isBlank() || timestamp <= 0L) {
+								result.success(false)
+								return@setMethodCallHandler
+							}
+							val ok = SmsQueueStore.retrySingle(this, sender, body, timestamp)
+							if (ok) {
+								NativeWorkScheduler.triggerImmediate(this)
+							}
+							result.success(ok)
+						} catch (e: Exception) {
+							result.error("RETRY_ONE_ERROR", e.message, null)
+						}
+					}
+
 					"triggerNativeSync" -> {
 						try {
 							NativeWorkScheduler.triggerImmediate(this)

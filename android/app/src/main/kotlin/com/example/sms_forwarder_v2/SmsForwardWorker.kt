@@ -42,7 +42,7 @@ class SmsForwardWorker(
             }.getOrNull()
             
             val endpoint = prefs?.getString("flutter.api_endpoint", "")?.trim().orEmpty()
-            val maxAttempts = prefs?.getInt("flutter.max_attempts", 12) ?: 12
+            val maxAttempts = readMaxAttempts(prefs) ?: 12
 
             val rulesJson = prefs?.getString("flutter.capture_rules_json", "[]") ?: "[]"
 
@@ -82,7 +82,7 @@ class SmsForwardWorker(
                     }
 
                     val body = item.optString("body", "")
-                    val parsed = parseBkash(body)
+                    val parsed = parseBkash(body, item.optString("sender", ""))
                     if (parsed == null) {
                         Log.w("SmsForwardWorker", "Failed to parse bKash from SMS")
                         item.put("status", "dead_letter")
@@ -208,6 +208,20 @@ class SmsForwardWorker(
         return false
     }
 
+    private fun readMaxAttempts(prefs: android.content.SharedPreferences?): Int? {
+        if (prefs == null) {
+            return null
+        }
+        val raw = prefs.all["flutter.max_attempts"]
+        return when (raw) {
+            is Int -> raw
+            is Long -> raw.toInt()
+            is Float -> raw.toInt()
+            is String -> raw.toIntOrNull()
+            else -> null
+        }
+    }
+
     private fun templateMatches(key: String, lowerBody: String): Boolean {
         return when (key.lowercase()) {
             "bkash" -> lowerBody.contains("trxid") && lowerBody.contains("balance")
@@ -217,30 +231,57 @@ class SmsForwardWorker(
         }
     }
 
-    private fun parseBkash(body: String): ParsedSms? {
-        val pattern = Regex(
-            pattern = """(?i)(?:You\s+have\s+received|Received)\s+(?:Tk|BDT|৳)\s*([0-9]+(?:\.[0-9]{1,2})?)\s+from\s+([0-9+]+)\.?\s*(?:Ref|Reference)\s+([^.]+)\.?\s*Fee\s+(?:Tk|BDT|৳)\s*([0-9]+(?:\.[0-9]{1,2})?)\.?\s*Balance\s+(?:Tk|BDT|৳)\s*([0-9]+(?:\.[0-9]{1,2})?)\.?\s*(?:TrxID|Transaction\s*ID)\s+([A-Z0-9]+)\s+at\s+([0-9]{1,2}/[0-9]{1,2}/[0-9]{4}\s+[0-9]{1,2}:[0-9]{2})""",
+    private fun parseBkash(body: String, fallbackSender: String): ParsedSms? {
+        val patterns = listOf(
+            Regex(
+                pattern = """(?i)(?:You\s+have\s+received|Received)\s+(?:Tk|BDT|৳)\s*([0-9]+(?:\.[0-9]{1,2})?)\s+from\s+([0-9+]+)\.?\s*(?:Ref|Reference)\s+([^.]+)\.?\s*Fee\s+(?:Tk|BDT|৳)\s*([0-9]+(?:\.[0-9]{1,2})?)\.?\s*Balance\s+(?:Tk|BDT|৳)\s*([0-9]+(?:\.[0-9]{1,2})?)\.?\s*(?:TrxID|Transaction\s*ID)\s+([A-Z0-9]+)\s+at\s+([0-9]{1,2}/[0-9]{1,2}/[0-9]{4}\s+[0-9]{1,2}:[0-9]{2})""",
+            ),
+            Regex(
+                pattern = """(?i)(?:You\s+have\s+received|Received)\s+(?:Tk|BDT|৳)\s*([0-9]+(?:\.[0-9]{1,2})?)\s+from\s+([0-9+]+)\.?\s*Fee\s+(?:Tk|BDT|৳)\s*([0-9]+(?:\.[0-9]{1,2})?)\.?\s*Balance\s+(?:Tk|BDT|৳)\s*([0-9]+(?:\.[0-9]{1,2})?)\.?\s*(?:TrxID|Transaction\s*ID)\s+([A-Z0-9]+)\s+at\s+([0-9]{1,2}/[0-9]{1,2}/[0-9]{4}\s+[0-9]{1,2}:[0-9]{2})""",
+            ),
+            Regex(
+                pattern = """(?i)Payment\s+(?:Tk|BDT|৳)\s*([0-9]+(?:\.[0-9]{1,2})?)\s+to\s+([^.]+)\.?\s+is\s+successful\.?\s*Balance\s+(?:Tk|BDT|৳)\s*([0-9]+(?:\.[0-9]{1,2})?)\.?\s*(?:TrxID|Transaction\s*ID)\s+([A-Z0-9]+)\s+at\s+([0-9]{1,2}/[0-9]{1,2}/[0-9]{4}\s+[0-9]{1,2}:[0-9]{2})""",
+            ),
+            Regex(
+                pattern = """(?i)Bill\s+successfully\s+paid\.?\s*Biller:\s*([^\n]+)\s*Amount:\s*(?:Tk|BDT|৳)\s*([0-9]+(?:\.[0-9]{1,2})?)\s*Fee:\s*(?:Tk|BDT|৳)\s*([0-9]+(?:\.[0-9]{1,2})?)\s*(?:TrxID|Transaction\s*ID)\s+([A-Z0-9]+)\s+at\s+([0-9]{1,2}/[0-9]{1,2}/[0-9]{4}\s+[0-9]{1,2}:[0-9]{2})""",
+            ),
         )
 
-        val match = pattern.find(body) ?: return null
-        val amount = match.groupValues[1].toDoubleOrNull() ?: return null
-        val sender = normalizePhone(match.groupValues[2])
-        val reference = cleanReference(match.groupValues[3])
-        val fee = match.groupValues[4].toDoubleOrNull() ?: 0.0
-        val balance = match.groupValues[5].toDoubleOrNull() ?: 0.0
-        val trxId = match.groupValues[6].trim().uppercase()
-        val dateText = match.groupValues[7].trim()
+        var match: MatchResult? = null
+        var patternIndex = -1
+        patterns.forEachIndexed { index, pattern ->
+            if (match == null) {
+                val candidate = pattern.find(body)
+                if (candidate != null) {
+                    match = candidate
+                    patternIndex = index
+                }
+            }
+        }
+
+        val found = match ?: return null
+        val fields = extractFields(found, patternIndex, fallbackSender)
+
+        val amount = fields.amount ?: return null
+        val sender = fields.sender
+        val reference = fields.reference
+        val fee = fields.fee
+        val balance = fields.balance
+        val trxId = fields.trxId
+        val dateText = fields.dateText
 
         if (!isValidAmount(amount) || !isValidAmount(fee) || !isValidAmount(balance)) {
             return null
         }
 
-        if (!senderPattern.matches(sender)) {
+        if (sender.all { it.isDigit() } && !senderPattern.matches(sender)) {
             return null
         }
 
-        if (reference.isBlank() || !referencePattern.matches(reference)) {
-            return null
+        val safeReference = if (reference.isBlank() || !referencePattern.matches(reference)) {
+            fields.fallbackReference
+        } else {
+            reference
         }
 
         if (!transactionPattern.matches(trxId)) {
@@ -258,12 +299,64 @@ class SmsForwardWorker(
         return ParsedSms(
             sender = sender,
             amount = amount,
-            reference = reference,
+            reference = safeReference,
             fee = fee,
             balance = balance,
             trxId = trxId,
             localIso = localIso,
             utcIso = utcIso,
+        )
+    }
+
+    private fun extractFields(match: MatchResult, patternIndex: Int, fallbackSender: String): ParsedFields {
+        if (patternIndex == 1) {
+            return ParsedFields(
+                amount = match.groupValues[1].toDoubleOrNull(),
+                sender = normalizePhone(match.groupValues[2]),
+                reference = "",
+                fee = match.groupValues[3].toDoubleOrNull() ?: 0.0,
+                balance = match.groupValues[4].toDoubleOrNull() ?: 0.0,
+                trxId = match.groupValues[5].trim().uppercase(),
+                dateText = match.groupValues[6].trim(),
+                fallbackReference = "RECEIVED",
+            )
+        }
+
+        if (patternIndex == 2) {
+            return ParsedFields(
+                amount = match.groupValues[1].toDoubleOrNull(),
+                sender = normalizePhone(fallbackSender),
+                reference = cleanReference(match.groupValues[2]),
+                fee = 0.0,
+                balance = match.groupValues[3].toDoubleOrNull() ?: 0.0,
+                trxId = match.groupValues[4].trim().uppercase(),
+                dateText = match.groupValues[5].trim(),
+                fallbackReference = "PAYMENT",
+            )
+        }
+
+        if (patternIndex == 3) {
+            return ParsedFields(
+                amount = match.groupValues[2].toDoubleOrNull(),
+                sender = normalizePhone(fallbackSender),
+                reference = cleanReference(match.groupValues[1]),
+                fee = match.groupValues[3].toDoubleOrNull() ?: 0.0,
+                balance = 0.0,
+                trxId = match.groupValues[4].trim().uppercase(),
+                dateText = match.groupValues[5].trim(),
+                fallbackReference = "BILL",
+            )
+        }
+
+        return ParsedFields(
+            amount = match.groupValues[1].toDoubleOrNull(),
+            sender = normalizePhone(match.groupValues[2]),
+            reference = cleanReference(match.groupValues[3]),
+            fee = match.groupValues[4].toDoubleOrNull() ?: 0.0,
+            balance = match.groupValues[5].toDoubleOrNull() ?: 0.0,
+            trxId = match.groupValues[6].trim().uppercase(),
+            dateText = match.groupValues[7].trim(),
+            fallbackReference = "RECEIVED",
         )
     }
 
@@ -380,6 +473,16 @@ class SmsForwardWorker(
         return formatter.format(parsed)
     }
 
+    private data class ParsedFields(
+        val amount: Double?,
+        val sender: String,
+        val reference: String,
+        val fee: Double,
+        val balance: Double,
+        val trxId: String,
+        val dateText: String,
+        val fallbackReference: String,
+    )
     private fun computeBackoffMs(attempts: Int): Long {
         val cappedShift = min(attempts, 20)
         val exp = 1000L shl cappedShift

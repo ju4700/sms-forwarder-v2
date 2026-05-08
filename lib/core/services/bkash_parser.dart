@@ -37,7 +37,19 @@ class BkashParser {
       caseSensitive: false,
     ),
     RegExp(
+      r'You\s+have\s+received\s+(?:Tk|BDT|৳)\s*([0-9]+(?:\.[0-9]{1,2})?)\s+from\s+([0-9+]+)\.?\s*Fee\s+(?:Tk|BDT|৳)\s*([0-9]+(?:\.[0-9]{1,2})?)\.?\s*Balance\s+(?:Tk|BDT|৳)\s*([0-9]+(?:\.[0-9]{1,2})?)\.?\s*(?:TrxID|Transaction\s*ID)\s+([A-Z0-9]+)\s+at\s+([0-9]{1,2}/[0-9]{1,2}/[0-9]{4}\s+[0-9]{1,2}:[0-9]{2})',
+      caseSensitive: false,
+    ),
+    RegExp(
       r'Received\s+(?:Tk|BDT|৳)\s*([0-9]+(?:\.[0-9]{1,2})?)\s+from\s+([0-9+]+)\.?\s*(?:Ref|Reference)\s+([^\.]+)\.?\s*Fee\s+(?:Tk|BDT|৳)\s*([0-9]+(?:\.[0-9]{1,2})?)\.?\s*Balance\s+(?:Tk|BDT|৳)\s*([0-9]+(?:\.[0-9]{1,2})?)\.?\s*(?:TrxID|Transaction\s*ID)\s+([A-Z0-9]+)\s+at\s+([0-9]{1,2}/[0-9]{1,2}/[0-9]{4}\s+[0-9]{1,2}:[0-9]{2})',
+      caseSensitive: false,
+    ),
+    RegExp(
+      r'Payment\s+(?:Tk|BDT|৳)\s*([0-9]+(?:\.[0-9]{1,2})?)\s+to\s+([^\.]+)\.?\s+is\s+successful\.?\s*Balance\s+(?:Tk|BDT|৳)\s*([0-9]+(?:\.[0-9]{1,2})?)\.?\s*(?:TrxID|Transaction\s*ID)\s+([A-Z0-9]+)\s+at\s+([0-9]{1,2}/[0-9]{1,2}/[0-9]{4}\s+[0-9]{1,2}:[0-9]{2})',
+      caseSensitive: false,
+    ),
+    RegExp(
+      r'Bill\s+successfully\s+paid\.?\s*Biller:\s*([^\n]+)\s*Amount:\s*(?:Tk|BDT|৳)\s*([0-9]+(?:\.[0-9]{1,2})?)\s*Fee:\s*(?:Tk|BDT|৳)\s*([0-9]+(?:\.[0-9]{1,2})?)\s*(?:TrxID|Transaction\s*ID)\s+([A-Z0-9]+)\s+at\s+([0-9]{1,2}/[0-9]{1,2}/[0-9]{4}\s+[0-9]{1,2}:[0-9]{2})',
       caseSensitive: false,
     ),
   ];
@@ -54,12 +66,14 @@ class BkashParser {
         lower.contains('balance');
   }
 
-  static ParsedBkashTransaction? parse(String body) {
+  static ParsedBkashTransaction? parse(String body, {String? fallbackSender}) {
     Match? match;
+    int patternIndex = -1;
     for (final RegExp pattern in _patterns) {
       final Match? candidate = pattern.firstMatch(body);
       if (candidate != null) {
         match = candidate;
+        patternIndex = _patterns.indexOf(pattern);
         break;
       }
     }
@@ -69,13 +83,14 @@ class BkashParser {
       return null;
     }
 
-    final double? amount = _toAmount(match.group(1));
-    final String sender = _normalizePhone(match.group(2) ?? '');
-    final String reference = _cleanReference((match.groupCount >= 3 ? match.group(3) : '') ?? '');
-    final double? fee = _toAmount(match.groupCount >= 4 ? match.group(4) : '0');
-    final double? balance = _toAmount(match.groupCount >= 5 ? match.group(5) : '0');
-    final String trxId = (match.groupCount >= 6 ? match.group(6) : '')?.trim().toUpperCase() ?? '';
-    final String dateText = (match.groupCount >= 7 ? match.group(7) : '')?.trim() ?? '';
+    final ParsedFields fields = _extractFields(match, patternIndex, fallbackSender: fallbackSender);
+    final double? amount = fields.amount;
+    final String sender = fields.sender;
+    final String reference = fields.reference;
+    final double? fee = fields.fee;
+    final double? balance = fields.balance;
+    final String trxId = fields.trxId;
+    final String dateText = fields.dateText;
 
     if (amount == null || fee == null || balance == null || sender.isEmpty) {
       return null;
@@ -85,13 +100,13 @@ class BkashParser {
       return null;
     }
 
-    if (!_senderPattern.hasMatch(sender)) {
+    if (_isDigitsOnly(sender) && !_senderPattern.hasMatch(sender)) {
       return null;
     }
 
-    if (reference.isEmpty || !_referencePattern.hasMatch(reference)) {
-      return null;
-    }
+    final String safeReference = reference.isEmpty || !_referencePattern.hasMatch(reference)
+        ? fields.fallbackReference
+        : reference;
 
     if (!_transactionPattern.hasMatch(trxId)) {
       return null;
@@ -109,13 +124,69 @@ class BkashParser {
       sender: sender,
       amount: amount,
       transactionId: trxId,
-      reference: reference,
+      reference: safeReference,
       fee: fee,
       balance: balance,
       localIso: local.toIso8601String(),
       utcIso: utc.toIso8601String(),
-      confidence: _confidenceFor(reference: reference),
+      confidence: _confidenceFor(reference: safeReference),
       rawSms: body,
+    );
+  }
+
+  static ParsedFields _extractFields(
+    Match match,
+    int patternIndex, {
+    String? fallbackSender,
+  }) {
+    if (patternIndex == 1) {
+      return ParsedFields(
+        amount: _toAmount(match.group(1)),
+        sender: _normalizePhone(match.group(2) ?? fallbackSender ?? ''),
+        reference: '',
+        fee: _toAmount(match.group(3)) ?? 0,
+        balance: _toAmount(match.group(4)) ?? 0,
+        trxId: (match.group(5) ?? '').trim().toUpperCase(),
+        dateText: (match.group(6) ?? '').trim(),
+        fallbackReference: 'RECEIVED',
+      );
+    }
+
+    if (patternIndex == 3) {
+      return ParsedFields(
+        amount: _toAmount(match.group(1)),
+        sender: _normalizePhone(fallbackSender ?? ''),
+        reference: _cleanReference(match.group(2) ?? ''),
+        fee: 0,
+        balance: _toAmount(match.group(3)),
+        trxId: (match.group(4) ?? '').trim().toUpperCase(),
+        dateText: (match.group(5) ?? '').trim(),
+        fallbackReference: 'PAYMENT',
+      );
+    }
+
+    if (patternIndex == 4) {
+      return ParsedFields(
+        amount: _toAmount(match.group(2)),
+        sender: _normalizePhone(fallbackSender ?? ''),
+        reference: _cleanReference(match.group(1) ?? ''),
+        fee: _toAmount(match.group(3)) ?? 0,
+        balance: 0,
+        trxId: (match.group(4) ?? '').trim().toUpperCase(),
+        dateText: (match.group(5) ?? '').trim(),
+        fallbackReference: 'BILL',
+      );
+    }
+
+    return ParsedFields(
+      amount: _toAmount(match.group(1)),
+      sender: _normalizePhone(match.group(2) ?? fallbackSender ?? ''),
+      reference: _cleanReference((match.groupCount >= 3 ? match.group(3) : '') ?? ''),
+      fee: _toAmount(match.groupCount >= 4 ? match.group(4) : '0'),
+      balance: _toAmount(match.groupCount >= 5 ? match.group(5) : '0'),
+      trxId: (match.groupCount >= 6 ? match.group(6) : '')?.trim().toUpperCase() ?? '',
+      dateText: (match.groupCount >= 7 ? match.group(7) : '')?.trim() ?? '',
+      fallbackReference: 'RECEIVED',
     );
   }
 
@@ -153,6 +224,10 @@ class BkashParser {
         .toUpperCase();
   }
 
+  static bool _isDigitsOnly(String value) {
+    return RegExp(r'^\d+$').hasMatch(value);
+  }
+
   static bool _isValidAmount(double value) {
     return value >= 0 && value <= 1000000;
   }
@@ -173,4 +248,26 @@ class BkashParser {
     }
     return 0.9;
   }
+}
+
+class ParsedFields {
+  ParsedFields({
+    required this.amount,
+    required this.sender,
+    required this.reference,
+    required this.fee,
+    required this.balance,
+    required this.trxId,
+    required this.dateText,
+    required this.fallbackReference,
+  });
+
+  final double? amount;
+  final String sender;
+  final String reference;
+  final double? fee;
+  final double? balance;
+  final String trxId;
+  final String dateText;
+  final String fallbackReference;
 }
