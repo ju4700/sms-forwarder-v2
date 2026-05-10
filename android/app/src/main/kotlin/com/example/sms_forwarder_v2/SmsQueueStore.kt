@@ -70,6 +70,7 @@ object SmsQueueStore {
                 "attemptCount" to item.optInt("attemptCount", 0),
                 "nextRetryAt" to item.optLong("nextRetryAt", 0L),
                 "lastError" to item.optString("lastError", ""),
+                "lastEvent" to item.optString("lastEvent", ""),
                 "forward" to item.optBoolean("forward", false),
             )
         }
@@ -80,10 +81,12 @@ object SmsQueueStore {
         val now = System.currentTimeMillis()
         var retried = 0
         queue.forEach { item ->
-            if (item.optString("status", "pending") == "dead_letter") {
+            val status = item.optString("status", "pending")
+            if (status == "dead_letter" || status == "failed") {
                 item.put("status", "retry_scheduled")
                 item.put("nextRetryAt", now)
                 item.put("lastError", "")
+                item.put("lastEvent", "Manual retry")
                 item.put("forward", true)
                 retried += 1
             }
@@ -107,6 +110,7 @@ object SmsQueueStore {
                 item.put("status", "retry_scheduled")
                 item.put("nextRetryAt", now)
                 item.put("lastError", "")
+                item.put("lastEvent", "Manual retry")
                 item.put("forward", true)
                 updated = true
             }

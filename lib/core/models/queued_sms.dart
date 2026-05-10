@@ -16,6 +16,7 @@ class QueuedSms {
     required this.updatedAt,
     this.nextRetryAt,
     this.lastError,
+    this.lastEvent,
   });
 
   final String id;
@@ -34,6 +35,7 @@ class QueuedSms {
   final int updatedAt;
   final int? nextRetryAt;
   final String? lastError;
+  final String? lastEvent;
 
   bool get isDelivered => status == 'delivered';
 
@@ -53,6 +55,7 @@ class QueuedSms {
       'attempt_count': attemptCount,
       'next_retry_at': nextRetryAt,
       'last_error': lastError,
+      'last_event': lastEvent,
       'created_at': createdAt,
       'updated_at': updatedAt,
     };
@@ -74,6 +77,7 @@ class QueuedSms {
       attemptCount: map['attempt_count']! as int,
       nextRetryAt: map['next_retry_at'] as int?,
       lastError: map['last_error'] as String?,
+      lastEvent: map['last_event'] as String?,
       createdAt: map['created_at']! as int,
       updatedAt: map['updated_at']! as int,
     );
@@ -84,6 +88,7 @@ class QueuedSms {
     int? attemptCount,
     int? nextRetryAt,
     String? lastError,
+    String? lastEvent,
     int? updatedAt,
   }) {
     return QueuedSms(
@@ -101,6 +106,7 @@ class QueuedSms {
       attemptCount: attemptCount ?? this.attemptCount,
       nextRetryAt: nextRetryAt ?? this.nextRetryAt,
       lastError: lastError ?? this.lastError,
+      lastEvent: lastEvent ?? this.lastEvent,
       createdAt: createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
     );

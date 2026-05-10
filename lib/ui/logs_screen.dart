@@ -36,7 +36,7 @@ class LogsScreen extends StatelessWidget {
                     return ListTile(
                       title: Text('${item.reference} · Tk ${item.amount.toStringAsFixed(2)}'),
                       subtitle: Text(
-                        '${item.sender}\n${item.transactionLocalTime}\n${item.lastError ?? item.status}',
+                        '${item.sender}\n${item.transactionLocalTime}\n${item.lastEvent ?? item.status}',
                       ),
                       isThreeLine: true,
                       trailing: Chip(
@@ -59,7 +59,9 @@ class LogsScreen extends StatelessWidget {
     final int captured = items.length;
     final int sent = items.where((QueuedSms item) => item.status == 'delivered').length;
     final int retrying = items.where((QueuedSms item) => item.status == 'retry_scheduled').length;
-    final int dead = items.where((QueuedSms item) => item.status == 'dead_letter').length;
+    final int dead = items
+      .where((QueuedSms item) => item.status == 'failed' || item.status == 'dead_letter')
+      .length;
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -74,7 +76,7 @@ class LogsScreen extends StatelessWidget {
           _stat('Captured', captured),
           _stat('Sent', sent),
           _stat('Retry', retrying),
-          _stat('Dead', dead),
+          _stat('Failed', dead),
         ],
       ),
     );

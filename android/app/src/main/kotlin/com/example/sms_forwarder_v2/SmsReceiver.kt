@@ -50,8 +50,8 @@ class SmsReceiver : BroadcastReceiver() {
             val shouldForward = ruleMatches(context, sender, body)
             Log.i("SmsReceiver", "Captured SMS from $sender (${body.length} chars), forward=$shouldForward")
 
+            SmsQueueStore.enqueue(context, sender, body, timestamp, shouldForward)
             if (shouldForward) {
-                SmsQueueStore.enqueue(context, sender, body, timestamp, true)
                 NativeWorkScheduler.ensurePeriodic(context)
                 NativeWorkScheduler.triggerImmediate(context)
             }

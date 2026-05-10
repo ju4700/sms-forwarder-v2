@@ -401,6 +401,8 @@ class AppController extends ChangeNotifier {
     final int attemptCount = _asInt(row['attemptCount']);
     final String sender = parsed?.sender ?? (row['sender'] as String? ?? '');
     final String status = (row['status'] as String? ?? 'pending').trim();
+    final String lastEvent = (row['lastEvent'] as String? ?? '').trim();
+    final String lastError = (row['lastError'] as String? ?? '').trim();
 
     final DateTime fallbackLocal = DateTime.fromMillisecondsSinceEpoch(createdAt);
     return QueuedSms(
@@ -420,6 +422,9 @@ class AppController extends ChangeNotifier {
       lastError: (row['lastError'] as String?)?.trim().isEmpty == true
           ? null
           : (row['lastError'] as String?),
+      lastEvent: lastEvent.isEmpty
+          ? (lastError.isEmpty ? null : lastError)
+          : lastEvent,
       createdAt: createdAt,
       updatedAt: createdAt,
     );

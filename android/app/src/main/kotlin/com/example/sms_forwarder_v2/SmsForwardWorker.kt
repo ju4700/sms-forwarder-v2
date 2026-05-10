@@ -61,7 +61,7 @@ class SmsForwardWorker(
             queue.forEach { item ->
                 try {
                     val status = item.optString("status", "pending")
-                    if (status == "dead_letter" || status == "delivered") {
+                    if (status == "failed" || status == "dead_letter" || status == "delivered") {
                         updated.add(item)
                         return@forEach
                     }
@@ -70,6 +70,7 @@ class SmsForwardWorker(
                         ruleMatches(rulesJson, item.optString("sender", ""), item.optString("body", ""))
                     if (!shouldForward) {
                         item.put("status", "captured")
+                        item.put("lastEvent", "Captured (rule mismatch)")
                         updated.add(item)
                         return@forEach
                     }
@@ -85,14 +86,17 @@ class SmsForwardWorker(
                     val parsed = parseBkash(body, item.optString("sender", ""))
                     if (parsed == null) {
                         Log.w("SmsForwardWorker", "Failed to parse bKash from SMS")
-                        item.put("status", "dead_letter")
-                        item.put("lastError", "Parser could not match bKash template")
+                        item.put("status", "captured")
+                        item.put("forward", false)
+                        item.put("nextRetryAt", 0L)
+                        item.put("lastEvent", "Captured (parser mismatch)")
                         updated.add(item)
                         return@forEach
                     }
 
                     val idempotencyKey = buildId(parsed)
                     Log.d("SmsForwardWorker", "Sending trx ${parsed.trxId}")
+                    item.put("lastEvent", "Sending ${parsed.trxId}")
                     val sent = sendPayload(
                         endpoint = endpoint,
                         idempotencyKey = idempotencyKey,
@@ -104,7 +108,7 @@ class SmsForwardWorker(
                         Log.i("SmsForwardWorker", "Delivered ${parsed.trxId}")
                         item.put("status", "delivered")
                         item.put("nextRetryAt", 0L)
-                        item.put("lastError", "")
+                        item.put("lastEvent", "Delivered ${parsed.trxId} (HTTP $sent)")
                         updated.add(item)
                         deliveredCount++
                         return@forEach
@@ -114,14 +118,20 @@ class SmsForwardWorker(
                     if (sent in 400..499 && !isRetryableHttpStatus(sent)) {
                         Log.w("SmsForwardWorker", "Non-retryable HTTP $sent, dead-lettering")
                         item.put("attemptCount", attempts)
-                        item.put("status", "dead_letter")
-                        item.put("lastError", "HTTP $sent")
+                        item.put("status", "failed")
+                        item.put("lastEvent", "Failed ${parsed.trxId} (HTTP $sent)")
                         updated.add(item)
                     } else if (attempts >= maxAttempts) {
                         Log.w("SmsForwardWorker", "Max attempts reached, dead-lettering")
                         item.put("attemptCount", attempts)
-                        item.put("status", "dead_letter")
-                        item.put("lastError", if (sent == 0) "Max attempts reached" else "HTTP $sent")
+                        item.put("status", "failed")
+                        item.put(
+                            "lastEvent",
+                            if (sent == 0)
+                                "Failed ${parsed.trxId} after $attempts attempts"
+                            else
+                                "Failed ${parsed.trxId} (HTTP $sent)",
+                        )
                         updated.add(item)
                     } else {
                         val retryAt = now + computeBackoffMs(attempts)
@@ -129,7 +139,13 @@ class SmsForwardWorker(
                         item.put("attemptCount", attempts)
                         item.put("status", "retry_scheduled")
                         item.put("nextRetryAt", retryAt)
-                        item.put("lastError", if (sent == 0) "Delivery failed" else "HTTP $sent")
+                        item.put(
+                            "lastEvent",
+                            if (sent == 0)
+                                "Retry ${parsed.trxId} ($attempts/$maxAttempts)"
+                            else
+                                "Retry ${parsed.trxId} (HTTP $sent)",
+                        )
                         updated.add(item)
                         shouldRetryWorker = true
                     }

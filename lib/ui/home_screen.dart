@@ -17,6 +17,8 @@ class _HomeScreenState extends State<HomeScreen> {
   static const Color _electricBlue = Color(0xFF009BFF);
   static const Color _cardBorder = Color(0xFFD8ECFF);
   bool _retrying = false;
+  final Set<String> _retryingItems = <String>{};
+  int _retryCooldownUntil = 0;
 
   @override
   void initState() {
@@ -156,10 +158,12 @@ class _HomeScreenState extends State<HomeScreen> {
             child: SizedBox(
               width: 220,
               child: OutlinedButton(
-                onPressed: _retrying
+                onPressed: _retrying || DateTime.now().millisecondsSinceEpoch < _retryCooldownUntil
                     ? null
                     : () async {
                         setState(() => _retrying = true);
+                        _retryCooldownUntil =
+                            DateTime.now().millisecondsSinceEpoch + 3000;
                         try {
                           await controller.retryFailed();
                         } catch (_) {
@@ -186,7 +190,9 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _buildQueueStats(AppController controller) {
     final int pending = controller.history.where((QueuedSms x) => x.status == 'pending' || x.status == 'retry_scheduled').length;
     final int sent = controller.history.where((QueuedSms x) => x.status == 'delivered').length;
-    final int failed = controller.history.where((QueuedSms x) => x.status == 'dead_letter').length;
+    final int failed = controller.history
+      .where((QueuedSms x) => x.status == 'failed' || x.status == 'dead_letter')
+      .length;
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -241,7 +247,9 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       child: Column(
         children: history.take(20).map((QueuedSms item) {
-          final bool isFailed = item.status == 'dead_letter';
+          final bool isFailed = item.status == 'failed' || item.status == 'dead_letter';
+          final bool isPending = item.status == 'pending' || item.status == 'retry_scheduled';
+          final bool isRetrying = _retryingItems.contains(item.id);
           return ListTile(
             dense: true,
             shape: RoundedRectangleBorder(
@@ -263,11 +271,30 @@ class _HomeScreenState extends State<HomeScreen> {
                     borderRadius: BorderRadius.circular(6),
                   ),
                 ),
-                if (isFailed) ...<Widget>[
+                if (isFailed || isPending) ...<Widget>[
                   const SizedBox(width: 8),
                   OutlinedButton(
-                    onPressed: () => widget.controller.retrySingle(item),
-                    child: const Text('Send'),
+                    onPressed: isRetrying
+                        ? null
+                        : () async {
+                            setState(() => _retryingItems.add(item.id));
+                            try {
+                              await widget.controller.retrySingle(item);
+                            } catch (_) {
+                              // controller.retrySingle is guarded
+                            } finally {
+                              if (mounted) {
+                                setState(() => _retryingItems.remove(item.id));
+                              }
+                            }
+                          },
+                    child: isRetrying
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Text('Send'),
                   ),
                 ],
               ],
