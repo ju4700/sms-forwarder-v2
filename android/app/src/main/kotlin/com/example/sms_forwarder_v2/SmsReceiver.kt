@@ -3,6 +3,8 @@ package com.example.sms_forwarder_v2
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.app.role.RoleManager
+import android.os.Build
 import android.provider.Telephony
 import android.util.Log
 import org.json.JSONArray
@@ -11,8 +13,13 @@ import org.json.JSONObject
 class SmsReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val action = intent.action
-        if (action != Telephony.Sms.Intents.SMS_RECEIVED_ACTION &&
-            action != Telephony.Sms.Intents.SMS_DELIVER_ACTION) {
+        val isDefaultSmsApp = isDefaultSmsApp(context)
+        val shouldProcess = when {
+            isDefaultSmsApp -> action == Telephony.Sms.Intents.SMS_DELIVER_ACTION
+            else -> action == Telephony.Sms.Intents.SMS_RECEIVED_ACTION
+        }
+
+        if (!shouldProcess) {
             return
         }
 
@@ -40,6 +47,11 @@ class SmsReceiver : BroadcastReceiver() {
                 return
             }
 
+            if (SmsQueueStore.containsMessage(context, sender, body, timestamp)) {
+                Log.i("SmsReceiver", "Duplicate SMS ignored from $sender at $timestamp")
+                return
+            }
+
             // Check queue size to prevent OOM on message floods
             val queue = runCatching { SmsQueueStore.readQueue(context) }.getOrNull() ?: emptyList()
             if (queue.size >= 290) {
@@ -50,7 +62,10 @@ class SmsReceiver : BroadcastReceiver() {
             val shouldForward = ruleMatches(context, sender, body)
             Log.i("SmsReceiver", "Captured SMS from $sender (${body.length} chars), forward=$shouldForward")
 
-            SmsQueueStore.enqueue(context, sender, body, timestamp, shouldForward)
+            val enqueued = SmsQueueStore.enqueue(context, sender, body, timestamp, shouldForward)
+            if (!enqueued) {
+                return
+            }
             if (shouldForward) {
                 NativeWorkScheduler.ensurePeriodic(context)
                 NativeWorkScheduler.triggerImmediate(context)
@@ -115,6 +130,19 @@ class SmsReceiver : BroadcastReceiver() {
             "rocket" -> lowerBody.contains("rocket") || lowerBody.contains("cash in")
             "dbbl" -> lowerBody.contains("dbbl") || lowerBody.contains("transaction")
             else -> false
+        }
+    }
+
+    private fun isDefaultSmsApp(context: Context): Boolean {
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val roleManager = context.getSystemService(Context.ROLE_SERVICE) as RoleManager
+                roleManager.isRoleHeld(RoleManager.ROLE_SMS)
+            } else {
+                Telephony.Sms.getDefaultSmsPackage(context) == context.packageName
+            }
+        } catch (_: Exception) {
+            false
         }
     }
 }

@@ -20,12 +20,16 @@ class SmsForwardWorker(
     params: WorkerParameters,
 ) : Worker(appContext, params) {
 
+    companion object {
+        private val workLock = Any()
+    }
+
     private val senderPattern = Regex("^01[3-9]\\d{8}$")
     private val referencePattern = Regex("^[A-Z0-9][A-Z0-9 _./-]{1,31}$")
     private val transactionPattern = Regex("^[A-Z0-9]{8,20}$")
 
-    override fun doWork(): Result {
-        return try {
+    override fun doWork(): Result = synchronized(workLock) {
+        try {
             Log.d("SmsForwardWorker", "doWork started, attempt ${runAttemptCount + 1}")
             
             val queue = runCatching { SmsQueueStore.readQueue(applicationContext) }.getOrElse { 

@@ -9,8 +9,13 @@ object SmsQueueStore {
     private const val keyQueue = "captured_sms_queue"
     private const val maxQueueSize = 300
 
-    fun enqueue(context: Context, sender: String, body: String, timestamp: Long, shouldForward: Boolean) {
+    fun enqueue(context: Context, sender: String, body: String, timestamp: Long, shouldForward: Boolean): Boolean {
         val queue = readQueue(context)
+        if (containsMessage(queue, sender, body, timestamp)) {
+            android.util.Log.i("SmsQueueStore", "Duplicate SMS ignored for sender=$sender timestamp=$timestamp")
+            return false
+        }
+
         val item = JSONObject().apply {
             put("sender", sender)
             put("body", body)
@@ -28,6 +33,19 @@ object SmsQueueStore {
             queue
         }
         writeQueue(context, trimmed)
+        return true
+    }
+
+    fun containsMessage(queue: List<JSONObject>, sender: String, body: String, timestamp: Long): Boolean {
+        return queue.any { item ->
+            item.optString("sender", "") == sender &&
+                item.optString("body", "") == body &&
+                item.optLong("timestamp", 0L) == timestamp
+        }
+    }
+
+    fun containsMessage(context: Context, sender: String, body: String, timestamp: Long): Boolean {
+        return containsMessage(readQueue(context), sender, body, timestamp)
     }
 
     fun readQueue(context: Context): MutableList<JSONObject> {
