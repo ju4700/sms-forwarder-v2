@@ -1,13 +1,13 @@
 :root {
-  --background: #f6f1e7;
-  --foreground: #1a1a14;
-  --card: #fff8ef;
-  --card-muted: #f0e7db;
-  --accent: #d2691e;
-  --accent-strong: #b14e0a;
-  --teal: #1d6f69;
-  --border: rgba(26, 26, 20, 0.12);
-  --shadow: 0 30px 80px rgba(26, 26, 20, 0.18);
+  --background: #ffffff;
+  --foreground: #000000;
+  --card: #ffffff;
+  --card-muted: #ffffff;
+  --accent: #ffffff;
+  --accent-strong: #ffffff;
+  --teal: #000000;
+  --border: #000000;
+  --shadow: none;
 }
 
 html {
@@ -25,10 +25,7 @@ body {
   display: flex;
   flex-direction: column;
   color: var(--foreground);
-  background:
-    radial-gradient(circle at 12% 12%, rgba(209, 105, 30, 0.18), transparent 42%),
-    radial-gradient(circle at 88% 20%, rgba(29, 111, 105, 0.18), transparent 38%),
-    linear-gradient(180deg, #f8f1e6 0%, #f1e8db 55%, #efe4d5 100%);
+  background: var(--background);
   font-family: var(--font-sans), "Segoe UI", sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;

@@ -32,20 +32,35 @@ export default function Home() {
     setError("");
     setStatus("Generating QR");
     setDeviceId("");
+    setPairing(null);
 
-    const response = await fetch("/api/pairing/start", {
-      method: "POST",
-    });
+    try {
+      const response = await fetch("/api/pairing/start", {
+        method: "POST",
+      });
 
-    if (!response.ok) {
-      setError("Failed to create a pairing session.");
-      setStatus("Error");
-      return;
+      if (!response.ok) {
+        let message = "Failed to create a pairing session.";
+        try {
+          const data = (await response.json()) as { error?: string };
+          if (data.error) {
+            message = data.error;
+          }
+        } catch {
+          // Ignore JSON parsing errors and fall back to the default message.
+        }
+        setError(message);
+        setStatus("Error");
+        return;
+      }
+
+      const payload = (await response.json()) as PairingStart;
+      setPairing(payload);
+      setStatus("Waiting for scan");
+    } catch {
+      setError("Failed to reach the pairing service.");
+      setStatus("Offline");
     }
-
-    const payload = (await response.json()) as PairingStart;
-    setPairing(payload);
-    setStatus("Waiting for scan");
   }
 
   useEffect(() => {

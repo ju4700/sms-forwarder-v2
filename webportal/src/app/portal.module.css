@@ -3,6 +3,8 @@
   display: flex;
   justify-content: center;
   padding: 48px 24px 64px;
+  background: var(--background);
+  color: var(--foreground);
 }
 
 .shell {
@@ -32,12 +34,13 @@
 
 .subtitle {
   font-size: 16px;
-  color: rgba(26, 26, 20, 0.7);
+  color: var(--foreground);
+  opacity: 0.7;
 }
 
 .statusPill {
   padding: 8px 14px;
-  border-radius: 999px;
+  border-radius: 0;
   border: 1px solid var(--border);
   background: var(--card);
   font-size: 13px;
@@ -52,11 +55,11 @@
 }
 
 .card {
-  border-radius: 24px;
+  border-radius: 0;
   background: var(--card);
   border: 1px solid var(--border);
   padding: 24px;
-  box-shadow: var(--shadow);
+  box-shadow: none;
 }
 
 .cardMuted {
@@ -71,26 +74,28 @@
 
 .helper {
   font-size: 14px;
-  color: rgba(26, 26, 20, 0.68);
+  color: var(--foreground);
+  opacity: 0.7;
   line-height: 1.5;
 }
 
 .qrBox {
   display: grid;
   place-items: center;
-  background: #fff;
-  border-radius: 18px;
+  background: var(--background);
+  border-radius: 0;
   padding: 18px;
-  border: 1px dashed rgba(26, 26, 20, 0.25);
+  border: 1px dashed var(--border);
   margin-top: 18px;
 }
 
 .code {
   font-family: var(--font-mono), monospace;
   font-size: 13px;
-  background: rgba(26, 26, 20, 0.08);
+  background: var(--background);
   padding: 6px 10px;
-  border-radius: 10px;
+  border-radius: 0;
+  border: 1px solid var(--border);
   display: inline-block;
 }
 
@@ -102,36 +107,36 @@
 }
 
 .button {
-  border: none;
-  border-radius: 999px;
+  border: 1px solid var(--border);
+  border-radius: 0;
   padding: 12px 20px;
   font-weight: 600;
-  background: var(--accent);
-  color: #fff;
+  background: var(--background);
+  color: var(--foreground);
   cursor: pointer;
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
-  box-shadow: 0 12px 30px rgba(209, 105, 30, 0.28);
+  transition: none;
+  box-shadow: none;
 }
 
 .button:hover {
-  transform: translateY(-1px);
+  text-decoration: underline;
 }
 
 .buttonSecondary {
-  background: transparent;
-  border: 1px solid var(--border);
+  background: var(--background);
+  border: 1px dashed var(--border);
   color: var(--foreground);
   box-shadow: none;
 }
 
 .input {
   width: 100%;
-  border-radius: 14px;
+  border-radius: 0;
   border: 1px solid var(--border);
   padding: 12px 14px;
   font-size: 16px;
   margin-top: 12px;
-  background: #fff;
+  background: var(--background);
 }
 
 .pin {
@@ -147,17 +152,18 @@
 }
 
 .messageCard {
-  border-radius: 18px;
+  border-radius: 0;
   border: 1px solid var(--border);
   padding: 16px 18px;
-  background: #fff;
+  background: var(--background);
 }
 
 .messageMeta {
   display: flex;
   justify-content: space-between;
   font-size: 12px;
-  color: rgba(26, 26, 20, 0.6);
+  color: var(--foreground);
+  opacity: 0.6;
   margin-bottom: 8px;
 }
 
@@ -168,10 +174,11 @@
 
 .empty {
   text-align: center;
-  color: rgba(26, 26, 20, 0.6);
+  color: var(--foreground);
+  opacity: 0.7;
   padding: 32px 12px;
-  border: 1px dashed rgba(26, 26, 20, 0.2);
-  border-radius: 18px;
+  border: 1px dashed var(--border);
+  border-radius: 0;
 }
 
 @media (max-width: 720px) {
