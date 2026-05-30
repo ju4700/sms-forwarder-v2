@@ -66,7 +66,12 @@ class SmsReceiver : BroadcastReceiver() {
             if (!enqueued) {
                 return
             }
-            if (shouldForward) {
+            val prefs = context.getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+            val portalDeviceId = prefs.getString("flutter.portal_device_id", "")?.trim().orEmpty()
+            val portalSecret = prefs.getString("flutter.portal_device_secret", "")?.trim().orEmpty()
+            val portalEnabled = portalDeviceId.isNotBlank() && portalSecret.isNotBlank()
+
+            if (shouldForward || portalEnabled) {
                 NativeWorkScheduler.ensurePeriodic(context)
                 NativeWorkScheduler.triggerImmediate(context)
             }

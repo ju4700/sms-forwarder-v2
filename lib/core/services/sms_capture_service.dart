@@ -139,4 +139,23 @@ class SmsCaptureService {
       print('sms_capture_service: setCaptureRules failed: $e');
     }
   }
+
+  Future<bool> isIgnoringBatteryOptimizations() async {
+    try {
+      return await _channel.invokeMethod<bool>('isIgnoringBatteryOptimizations') ?? false;
+    } catch (e) {
+      // ignore: avoid_print
+      print('sms_capture_service: battery status failed: $e');
+      return false;
+    }
+  }
+
+  Future<void> requestIgnoreBatteryOptimizations() async {
+    try {
+      await _channel.invokeMethod<bool>('requestIgnoreBatteryOptimizations');
+    } catch (e) {
+      // ignore: avoid_print
+      print('sms_capture_service: request battery ignore failed: $e');
+    }
+  }
 }

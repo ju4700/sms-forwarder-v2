@@ -24,6 +24,10 @@ object SmsQueueStore {
             put("nextRetryAt", 0L)
             put("status", if (shouldForward) "pending" else "captured")
             put("forward", shouldForward)
+            put("portalStatus", "pending")
+            put("portalAttemptCount", 0)
+            put("portalNextRetryAt", 0L)
+            put("portalLastEvent", "")
         }
         queue.add(item)
 
@@ -90,6 +94,10 @@ object SmsQueueStore {
                 "lastError" to item.optString("lastError", ""),
                 "lastEvent" to item.optString("lastEvent", ""),
                 "forward" to item.optBoolean("forward", false),
+                "portalStatus" to item.optString("portalStatus", "pending"),
+                "portalAttemptCount" to item.optInt("portalAttemptCount", 0),
+                "portalNextRetryAt" to item.optLong("portalNextRetryAt", 0L),
+                "portalLastEvent" to item.optString("portalLastEvent", ""),
             )
         }
     }

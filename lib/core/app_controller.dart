@@ -22,6 +22,10 @@ class AppController extends ChangeNotifier {
     apiEndpoint: '',
     foregroundReliabilityMode: false,
     maxAttempts: 12,
+    portalDeviceId: '',
+    portalDeviceSecret: '',
+    portalPin: '',
+    portalPairedAt: 0,
   );
   bool _ready = false;
   bool _permissionsGranted = false;
@@ -33,6 +37,9 @@ class AppController extends ChangeNotifier {
   Timer? _inboxRefreshTimer;
 
   AppSettings get settings => _settings;
+  bool get portalPaired => _settings.portalDeviceId.isNotEmpty;
+  String get portalDeviceId => _settings.portalDeviceId;
+  String get portalPin => _settings.portalPin;
   bool get ready => _ready;
   bool get permissionsGranted => _permissionsGranted;
   bool get isDefaultSmsApp => _isDefaultSmsApp;
@@ -55,7 +62,16 @@ class AppController extends ChangeNotifier {
           apiEndpoint: '',
           foregroundReliabilityMode: false,
           maxAttempts: 12,
+          portalDeviceId: '',
+          portalDeviceSecret: '',
+          portalPin: '',
+          portalPairedAt: 0,
         );
+      }
+
+      if (_settings.portalDeviceId.isNotEmpty && !_settings.foregroundReliabilityMode) {
+        _settings = _settings.copyWith(foregroundReliabilityMode: true);
+        await SettingsService.instance.save(_settings);
       }
 
       // Apply foreground mode with error handling
@@ -193,6 +209,35 @@ class AppController extends ChangeNotifier {
     _status = value
         ? 'Foreground reliability mode enabled'
         : 'Foreground reliability mode disabled';
+    notifyListeners();
+  }
+
+  Future<void> savePortalPairing({
+    required String deviceId,
+    required String deviceSecret,
+    required String pin,
+  }) async {
+    _settings = _settings.copyWith(
+      portalDeviceId: deviceId,
+      portalDeviceSecret: deviceSecret,
+      portalPin: pin,
+      portalPairedAt: DateTime.now().millisecondsSinceEpoch,
+    );
+    await SettingsService.instance.save(_settings);
+    await setForegroundMode(true);
+    await _smsCaptureService.triggerNativeSync();
+    notifyListeners();
+  }
+
+  Future<void> clearPortalPairing() async {
+    _settings = _settings.copyWith(
+      portalDeviceId: '',
+      portalDeviceSecret: '',
+      portalPin: '',
+      portalPairedAt: 0,
+    );
+    await SettingsService.instance.save(_settings);
+    await _smsCaptureService.triggerNativeSync();
     notifyListeners();
   }
 

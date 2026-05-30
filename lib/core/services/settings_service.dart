@@ -5,22 +5,38 @@ class AppSettings {
     required this.apiEndpoint,
     required this.foregroundReliabilityMode,
     required this.maxAttempts,
+    required this.portalDeviceId,
+    required this.portalDeviceSecret,
+    required this.portalPin,
+    required this.portalPairedAt,
   });
 
   final String apiEndpoint;
   final bool foregroundReliabilityMode;
   final int maxAttempts;
+  final String portalDeviceId;
+  final String portalDeviceSecret;
+  final String portalPin;
+  final int portalPairedAt;
 
   AppSettings copyWith({
     String? apiEndpoint,
     bool? foregroundReliabilityMode,
     int? maxAttempts,
+    String? portalDeviceId,
+    String? portalDeviceSecret,
+    String? portalPin,
+    int? portalPairedAt,
   }) {
     return AppSettings(
       apiEndpoint: apiEndpoint ?? this.apiEndpoint,
       foregroundReliabilityMode:
           foregroundReliabilityMode ?? this.foregroundReliabilityMode,
       maxAttempts: maxAttempts ?? this.maxAttempts,
+      portalDeviceId: portalDeviceId ?? this.portalDeviceId,
+      portalDeviceSecret: portalDeviceSecret ?? this.portalDeviceSecret,
+      portalPin: portalPin ?? this.portalPin,
+      portalPairedAt: portalPairedAt ?? this.portalPairedAt,
     );
   }
 }
@@ -33,6 +49,10 @@ class SettingsService {
   static const String _kApiEndpoint = 'api_endpoint';
   static const String _kForegroundMode = 'foreground_mode';
   static const String _kMaxAttempts = 'max_attempts';
+  static const String _kPortalDeviceId = 'portal_device_id';
+  static const String _kPortalDeviceSecret = 'portal_device_secret';
+  static const String _kPortalPin = 'portal_pin';
+  static const String _kPortalPairedAt = 'portal_paired_at';
   static const String _kInboxImported = 'inbox_imported';
 
   Future<AppSettings> load() async {
@@ -41,6 +61,10 @@ class SettingsService {
       apiEndpoint: prefs.getString(_kApiEndpoint) ?? '',
       foregroundReliabilityMode: prefs.getBool(_kForegroundMode) ?? false,
       maxAttempts: prefs.getInt(_kMaxAttempts) ?? 12,
+      portalDeviceId: prefs.getString(_kPortalDeviceId) ?? '',
+      portalDeviceSecret: prefs.getString(_kPortalDeviceSecret) ?? '',
+      portalPin: prefs.getString(_kPortalPin) ?? '',
+      portalPairedAt: prefs.getInt(_kPortalPairedAt) ?? 0,
     );
   }
 
@@ -49,6 +73,13 @@ class SettingsService {
     await prefs.setString(_kApiEndpoint, settings.apiEndpoint.trim());
     await prefs.setBool(_kForegroundMode, settings.foregroundReliabilityMode);
     await prefs.setInt(_kMaxAttempts, settings.maxAttempts);
+    await prefs.setString(_kPortalDeviceId, settings.portalDeviceId.trim());
+    await prefs.setString(
+      _kPortalDeviceSecret,
+      settings.portalDeviceSecret.trim(),
+    );
+    await prefs.setString(_kPortalPin, settings.portalPin.trim());
+    await prefs.setInt(_kPortalPairedAt, settings.portalPairedAt);
   }
 
   Future<bool> hasImportedInbox() async {

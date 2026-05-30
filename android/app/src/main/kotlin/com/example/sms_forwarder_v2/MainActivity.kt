@@ -6,6 +6,9 @@ import android.content.Intent
 import android.os.Build
 import android.provider.Telephony
 import android.telephony.SmsManager
+import android.os.PowerManager
+import android.provider.Settings
+import android.net.Uri
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.plugin.common.MethodChannel
@@ -137,6 +140,22 @@ class MainActivity : FlutterActivity() {
 						}
 					}
 
+					"isIgnoringBatteryOptimizations" -> {
+						try {
+							result.success(isIgnoringBatteryOptimizations())
+						} catch (e: Exception) {
+							result.error("BATTERY_STATUS_ERROR", e.message, null)
+						}
+					}
+
+					"requestIgnoreBatteryOptimizations" -> {
+						try {
+							result.success(requestIgnoreBatteryOptimizations())
+						} catch (e: Exception) {
+							result.error("BATTERY_REQUEST_ERROR", e.message, null)
+						}
+					}
+
 					else -> result.notImplemented()
 				}
 			}
@@ -219,6 +238,30 @@ class MainActivity : FlutterActivity() {
 
 		val intent = Intent(Telephony.Sms.Intents.ACTION_CHANGE_DEFAULT)
 		intent.putExtra(Telephony.Sms.Intents.EXTRA_PACKAGE_NAME, packageName)
+		startActivity(intent)
+		return true
+	}
+
+	private fun isIgnoringBatteryOptimizations(): Boolean {
+		return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+			val manager = getSystemService(Context.POWER_SERVICE) as PowerManager
+			manager.isIgnoringBatteryOptimizations(packageName)
+		} else {
+			true
+		}
+	}
+
+	private fun requestIgnoreBatteryOptimizations(): Boolean {
+		if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+			return true
+		}
+		if (isIgnoringBatteryOptimizations()) {
+			return true
+		}
+		val intent = Intent(
+			Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+			Uri.parse("package:$packageName"),
+		)
 		startActivity(intent)
 		return true
 	}

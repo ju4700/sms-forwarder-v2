@@ -10,6 +10,7 @@ import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import android.content.Context
 
 class SmsMonitorService : Service() {
     override fun onBind(intent: Intent?): IBinder? {
@@ -39,6 +40,22 @@ class SmsMonitorService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         return START_STICKY
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        val prefs = getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+        val enabled = prefs.getBoolean("flutter.foreground_mode", false)
+        if (!enabled) {
+            return
+        }
+
+        val restartIntent = Intent(applicationContext, SmsMonitorService::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(restartIntent)
+        } else {
+            startService(restartIntent)
+        }
     }
 
     private fun createNotificationChannel() {

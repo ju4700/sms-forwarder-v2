@@ -1,6 +1,7 @@
 package com.example.sms_forwarder_v2
 
 import android.content.Context
+import android.content.SharedPreferences
 import android.util.Log
 import androidx.work.Worker
 import androidx.work.WorkerParameters
@@ -47,11 +48,12 @@ class SmsForwardWorker(
             
             val endpoint = prefs?.getString("flutter.api_endpoint", "")?.trim().orEmpty()
             val maxAttempts = readMaxAttempts(prefs) ?: 12
+            val portalSettings = readPortalSettings(prefs)
 
             val rulesJson = prefs?.getString("flutter.capture_rules_json", "[]") ?: "[]"
 
-            if (endpoint.isBlank()) {
-                Log.w("SmsForwardWorker", "No endpoint configured, skipping delivery")
+            if (endpoint.isBlank() && portalSettings == null) {
+                Log.w("SmsForwardWorker", "No delivery target configured, skipping")
                 return Result.success()
             }
             Log.d("SmsForwardWorker", "Processing ${queue.size} items, max retries=$maxAttempts")
@@ -64,8 +66,25 @@ class SmsForwardWorker(
 
             queue.forEach { item ->
                 try {
+                    val portalRetry = maybeDeliverToPortal(
+                        item = item,
+                        settings = portalSettings,
+                        maxAttempts = maxAttempts,
+                        now = now,
+                    )
+                    if (portalRetry) {
+                        shouldRetryWorker = true
+                    }
+
                     val status = item.optString("status", "pending")
                     if (status == "failed" || status == "dead_letter" || status == "delivered") {
+                        updated.add(item)
+                        return@forEach
+                    }
+
+                    if (endpoint.isBlank()) {
+                        item.put("status", "captured")
+                        item.put("lastEvent", "Captured (endpoint not set)")
                         updated.add(item)
                         return@forEach
                     }
@@ -179,6 +198,118 @@ class SmsForwardWorker(
         } catch (e: Exception) {
             Log.e("SmsForwardWorker", "Unhandled error in doWork: ${e.message}", e)
             Result.retry()
+        }
+    }
+
+    private data class PortalSettings(
+        val deviceId: String,
+        val deviceSecret: String,
+        val ingestUrl: String,
+    )
+
+    private fun readPortalSettings(prefs: SharedPreferences?): PortalSettings? {
+        if (prefs == null) {
+            return null
+        }
+        val deviceId = prefs.getString("flutter.portal_device_id", "")?.trim().orEmpty()
+        val deviceSecret = prefs.getString("flutter.portal_device_secret", "")?.trim().orEmpty()
+        if (deviceId.isBlank() || deviceSecret.isBlank()) {
+            return null
+        }
+        return PortalSettings(
+            deviceId = deviceId,
+            deviceSecret = deviceSecret,
+            ingestUrl = PortalConfig.ingestUrl(),
+        )
+    }
+
+    private fun maybeDeliverToPortal(
+        item: JSONObject,
+        settings: PortalSettings?,
+        maxAttempts: Int,
+        now: Long,
+    ): Boolean {
+        if (settings == null) {
+            return false
+        }
+
+        val portalStatus = item.optString("portalStatus", "pending")
+        if (portalStatus == "delivered" || portalStatus == "failed") {
+            return false
+        }
+
+        val nextRetryAt = item.optLong("portalNextRetryAt", 0L)
+        if (nextRetryAt > now) {
+            return true
+        }
+
+        val sender = item.optString("sender", "")
+        val body = item.optString("body", "")
+        val timestamp = item.optLong("timestamp", now)
+
+        val sent = sendPortalPayload(settings, sender, body, timestamp)
+        if (sent in 200..299) {
+            item.put("portalStatus", "delivered")
+            item.put("portalNextRetryAt", 0L)
+            item.put("portalLastEvent", "Uploaded (HTTP $sent)")
+            return false
+        }
+
+        val attempts = item.optInt("portalAttemptCount", 0) + 1
+        if (attempts >= maxAttempts) {
+            item.put("portalAttemptCount", attempts)
+            item.put("portalStatus", "failed")
+            item.put("portalLastEvent", "Upload failed (HTTP $sent)")
+            return false
+        }
+
+        val retryAt = now + computeBackoffMs(attempts)
+        item.put("portalAttemptCount", attempts)
+        item.put("portalStatus", "retry_scheduled")
+        item.put("portalNextRetryAt", retryAt)
+        item.put("portalLastEvent", "Retry upload ($attempts/$maxAttempts)")
+        return true
+    }
+
+    private fun sendPortalPayload(
+        settings: PortalSettings,
+        sender: String,
+        body: String,
+        timestamp: Long,
+    ): Int {
+        if (sender.isBlank() || body.isBlank()) {
+            return 0
+        }
+
+        val payload = JSONObject().apply {
+            put("address", sender)
+            put("body", body)
+            put("timestamp", timestamp)
+            put("direction", "incoming")
+        }
+
+        val url = runCatching { URL(settings.ingestUrl) }.getOrNull() ?: return 0
+        val connection = (url.openConnection() as? HttpURLConnection) ?: return 0
+
+        return try {
+            connection.requestMethod = "POST"
+            connection.connectTimeout = 15000
+            connection.readTimeout = 20000
+            connection.doOutput = true
+            connection.setRequestProperty("Content-Type", "application/json")
+            connection.setRequestProperty("x-device-id", settings.deviceId)
+            connection.setRequestProperty("x-device-secret", settings.deviceSecret)
+
+            OutputStreamWriter(connection.outputStream).use { writer ->
+                writer.write(payload.toString())
+                writer.flush()
+            }
+
+            connection.responseCode
+        } catch (_: Exception) {
+            0
+        } finally {
+            connection.disconnect()
         }
     }
 

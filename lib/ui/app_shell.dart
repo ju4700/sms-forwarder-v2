@@ -4,6 +4,7 @@ import '../core/app_controller.dart';
 import 'home_screen.dart';
 import 'logs_screen.dart';
 import 'messages/messages_screen.dart';
+import 'portal_screen.dart';
 import 'policy_screen.dart';
 
 class AppShell extends StatefulWidget {
@@ -22,6 +23,7 @@ class _AppShellState extends State<AppShell> {
     'SMS Forwarder',
     'Messages',
     'Logs',
+    'Portal',
     'Policy',
   ];
 
@@ -41,6 +43,7 @@ class _AppShellState extends State<AppShell> {
               HomeScreen(controller: widget.controller),
               MessagesScreen(controller: widget.controller),
               LogsScreen(controller: widget.controller),
+              PortalScreen(controller: widget.controller),
               const PolicyScreen(),
             ],
           ),
@@ -66,6 +69,11 @@ class _AppShellState extends State<AppShell> {
                 icon: Icon(Icons.receipt_long_outlined),
                 selectedIcon: Icon(Icons.receipt_long),
                 label: 'Logs',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.qr_code_2_outlined),
+                selectedIcon: Icon(Icons.qr_code_2),
+                label: 'Portal',
               ),
               NavigationDestination(
                 icon: Icon(Icons.policy_outlined),

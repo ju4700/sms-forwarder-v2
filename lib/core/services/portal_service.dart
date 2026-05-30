@@ -1,0 +1,103 @@
+import 'dart:convert';
+
+import 'package:http/http.dart' as http;
+
+import 'portal_config.dart';
+
+class PortalPairingResult {
+  PortalPairingResult({
+    required this.deviceId,
+    required this.deviceSecret,
+    required this.pin,
+  });
+
+  final String deviceId;
+  final String deviceSecret;
+  final String pin;
+}
+
+class PortalMessage {
+  PortalMessage({
+    required this.address,
+    required this.body,
+    required this.timestamp,
+    required this.direction,
+  });
+
+  final String address;
+  final String body;
+  final int timestamp;
+  final String direction;
+
+  Map<String, dynamic> toJson() {
+    return <String, dynamic>{
+      'address': address,
+      'body': body,
+      'timestamp': timestamp,
+      'direction': direction,
+    };
+  }
+}
+
+class PortalService {
+  PortalService({http.Client? client}) : _client = client ?? http.Client();
+
+  final http.Client _client;
+
+  Uri _resolve(String path) {
+    final String base = PortalConfig.baseUrl.replaceAll(RegExp(r'/+$'), '');
+    return Uri.parse('$base$path');
+  }
+
+  Future<PortalPairingResult> claimPairing(String pairingId) async {
+    final Uri url = _resolve('/api/pairing/claim');
+    final http.Response response = await _client.post(
+      url,
+      headers: <String, String>{
+        'Content-Type': 'application/json',
+      },
+      body: jsonEncode(<String, dynamic>{
+        'pairingId': pairingId,
+      }),
+    );
+
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw Exception('Pairing failed (${response.statusCode})');
+    }
+
+    final Map<String, dynamic> payload =
+        jsonDecode(response.body) as Map<String, dynamic>;
+    return PortalPairingResult(
+      deviceId: payload['deviceId']?.toString() ?? '',
+      deviceSecret: payload['deviceSecret']?.toString() ?? '',
+      pin: payload['pin']?.toString() ?? '',
+    );
+  }
+
+  Future<void> uploadMessagesBulk({
+    required String deviceId,
+    required String deviceSecret,
+    required List<PortalMessage> messages,
+  }) async {
+    if (messages.isEmpty) {
+      return;
+    }
+
+    final Uri url = _resolve('/api/messages/bulk');
+    final http.Response response = await _client.post(
+      url,
+      headers: <String, String>{
+        'Content-Type': 'application/json',
+        'x-device-id': deviceId,
+        'x-device-secret': deviceSecret,
+      },
+      body: jsonEncode(<String, dynamic>{
+        'messages': messages.map((PortalMessage message) => message.toJson()).toList(),
+      }),
+    );
+
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw Exception('Bulk upload failed (${response.statusCode})');
+    }
+  }
+}
