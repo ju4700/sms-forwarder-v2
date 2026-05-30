@@ -68,8 +68,9 @@ export default function Home() {
     if (saved) {
       setDeviceId(saved);
       setStatus("Previously paired");
+    } else {
+      void startPairing();
     }
-    void startPairing();
   }, []);
 
   useEffect(() => {
@@ -114,65 +115,92 @@ export default function Home() {
         </div>
 
         <div className={styles.grid}>
-          <section className={styles.card}>
-            <div className={styles.cardTitle}>1. Scan this QR code</div>
-            <div className={styles.helper}>
-              Open the Portal screen on your phone and scan the QR to pair.
-            </div>
-
-            <div className={styles.qrBox}>
-              {pairing ? (
-                <QRCodeCanvas value={pairing.qrPayload} size={220} />
-              ) : (
-                <div className={styles.helper}>Preparing QR code...</div>
-              )}
-            </div>
-
-            {pairing ? (
-              <p className={styles.helper}>
-                Pairing code: <span className={styles.code}>{pairing.pairingId}</span>
-              </p>
-            ) : null}
-
-            <div className={styles.actions}>
-              <button className={styles.button} type="button" onClick={startPairing}>
-                Refresh QR
-              </button>
-              {portalLink ? (
-                <a className={`${styles.button} ${styles.buttonSecondary}`} href={portalLink}>
-                  Open portal
-                </a>
-              ) : null}
-            </div>
-            {error ? <p className={styles.helper}>{error}</p> : null}
-          </section>
-
-          <section className={`${styles.card} ${styles.cardMuted}`}>
-            <div className={styles.cardTitle}>2. Confirm PIN on device</div>
-            <div className={styles.helper}>
-              After pairing, the phone shows a PIN. You will need that PIN to
-              access the messages.
-            </div>
-
-            {deviceId ? (
-              <div className={styles.helper}>
-                Device linked: <span className={styles.code}>{deviceId}</span>
+          {status === "Previously paired" ? (
+            <section className={styles.card} style={{ gridColumn: "1 / -1" }}>
+              <div className={styles.cardTitle} style={{ textAlign: "center" }}>Device Linked</div>
+              <div className={styles.helper} style={{ textAlign: "center" }}>
+                You have previously paired a device. To view your messages, please open the portal and enter your PIN.
               </div>
-            ) : (
-              <div className={styles.helper}>Waiting for device confirmation.</div>
-            )}
+              <div className={styles.actions} style={{ justifyContent: "center", marginTop: "2rem" }}>
+                <a className={styles.button} href={portalLink}>
+                  Unlock Portal
+                </a>
+                <button
+                  className={`${styles.button} ${styles.buttonSecondary}`}
+                  type="button"
+                  onClick={() => {
+                    setDeviceId("");
+                    localStorage.removeItem("portalDeviceId");
+                    void startPairing();
+                  }}
+                >
+                  Pair a new device
+                </button>
+              </div>
+            </section>
+          ) : (
+            <>
+              <section className={styles.card}>
+                <div className={styles.cardTitle}>1. Scan this QR code</div>
+                <div className={styles.helper}>
+                  Open the Portal screen on your phone and scan the QR to pair.
+                </div>
 
-            <div className={styles.actions}>
-              <a
-                className={`${styles.button} ${styles.buttonSecondary}`}
-                href="https://support.google.com/android/answer/9777309"
-                target="_blank"
-                rel="noreferrer"
-              >
-                Battery tips
-              </a>
-            </div>
-          </section>
+                <div className={styles.qrBox}>
+                  {pairing ? (
+                    <QRCodeCanvas value={pairing.qrPayload} size={220} />
+                  ) : (
+                    <div className={styles.helper}>Preparing QR code...</div>
+                  )}
+                </div>
+
+                {pairing ? (
+                  <p className={styles.helper}>
+                    Pairing code: <span className={styles.code}>{pairing.pairingId}</span>
+                  </p>
+                ) : null}
+
+                <div className={styles.actions}>
+                  <button className={styles.button} type="button" onClick={startPairing}>
+                    Refresh QR
+                  </button>
+                  {portalLink ? (
+                    <a className={`${styles.button} ${styles.buttonSecondary}`} href={portalLink}>
+                      Open portal
+                    </a>
+                  ) : null}
+                </div>
+                {error ? <p className={styles.helper}>{error}</p> : null}
+              </section>
+
+              <section className={`${styles.card} ${styles.cardMuted}`}>
+                <div className={styles.cardTitle}>2. Confirm PIN on device</div>
+                <div className={styles.helper}>
+                  After pairing, the phone shows a PIN. You will need that PIN to
+                  access the messages.
+                </div>
+
+                {deviceId ? (
+                  <div className={styles.helper}>
+                    Device linked: <span className={styles.code}>{deviceId}</span>
+                  </div>
+                ) : (
+                  <div className={styles.helper}>Waiting for device confirmation.</div>
+                )}
+
+                <div className={styles.actions}>
+                  <a
+                    className={`${styles.button} ${styles.buttonSecondary}`}
+                    href="https://support.google.com/android/answer/9777309"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Battery tips
+                  </a>
+                </div>
+              </section>
+            </>
+          )}
         </div>
       </div>
     </div>
