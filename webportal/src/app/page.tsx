@@ -123,7 +123,7 @@ export default function Home() {
             </div>
 
             {pairing ? (
-              <p className={styles.helper}>
+              <p className={`${styles.helper} ${styles.pairingCode}`}>
                 Pairing code: <span className={styles.code}>{pairing.pairingId}</span>
               </p>
             ) : null}
