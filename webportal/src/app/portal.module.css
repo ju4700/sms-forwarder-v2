@@ -89,6 +89,7 @@
   padding: 18px;
   border: 1px dashed var(--border);
   margin-top: 18px;
+  margin-bottom: 16px;
 }
 
 .code {
