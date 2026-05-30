@@ -15,8 +15,8 @@ export async function POST(request: Request) {
   await ensureSchema();
 
   const body = await request.json().catch(() => ({}));
-  const deviceId = typeof body.deviceId == "string" ? body.deviceId.trim() : "";
-  const pin = typeof body.pin == "string" ? body.pin.trim() : "";
+  const deviceId = body?.deviceId ? String(body.deviceId).trim() : "";
+  const pin = body?.pin ? String(body.pin).trim() : "";
 
   if (!deviceId || !pin) {
     return NextResponse.json({ error: "deviceId and pin are required" }, { status: 400 });

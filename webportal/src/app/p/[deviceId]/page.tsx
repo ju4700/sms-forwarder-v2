@@ -144,7 +144,7 @@ export default function PortalPage({ params }: Props) {
             <input
               className={styles.input}
               value={pin}
-              onChange={(event) => setPin(event.target.value)}
+              onChange={(event) => setPin(event.target.value.replace(/\D/g, ""))}
               placeholder="6-digit PIN"
               inputMode="numeric"
             />

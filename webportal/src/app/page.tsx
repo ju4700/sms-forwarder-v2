@@ -64,6 +64,11 @@ export default function Home() {
   }
 
   useEffect(() => {
+    const saved = localStorage.getItem("portalDeviceId");
+    if (saved) {
+      setDeviceId(saved);
+      setStatus("Previously paired");
+    }
     void startPairing();
   }, []);
 
@@ -81,6 +86,7 @@ export default function Home() {
         const data = (await response.json()) as PairingStatus;
         if (data.status == "claimed" && data.deviceId) {
           setDeviceId(data.deviceId);
+          localStorage.setItem("portalDeviceId", data.deviceId);
           setStatus("Paired");
         }
         if (data.status == "expired") {
