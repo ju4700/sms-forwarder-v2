@@ -1,4 +1,4 @@
-import mysql, { type Pool } from "mysql2/promise";
+import mysql, { type ExecuteValues, type Pool, type QueryValues } from "mysql2/promise";
 
 let pool: Pool | null = null;
 
@@ -41,11 +41,11 @@ export function getPool(): Pool {
   return created;
 }
 
-export async function query<T>(sql: string, params: unknown[] = []): Promise<T> {
+export async function query<T>(sql: string, params: QueryValues = []): Promise<T> {
   const [rows] = await getPool().query(sql, params);
   return rows as T;
 }
 
-export async function execute(sql: string, params: unknown[] = []): Promise<void> {
+export async function execute(sql: string, params: ExecuteValues = []): Promise<void> {
   await getPool().execute(sql, params);
 }

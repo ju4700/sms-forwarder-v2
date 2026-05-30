@@ -85,8 +85,9 @@ export function verifySessionToken(token: string): { deviceId: string } | null {
   }
 }
 
-export function getSessionFromCookies(): { deviceId: string } | null {
-  const sessionCookie = cookies().get("portal_session");
+export async function getSessionFromCookies(): Promise<{ deviceId: string } | null> {
+  const cookieStore = await cookies();
+  const sessionCookie = cookieStore.get("portal_session");
   if (!sessionCookie?.value) {
     return null;
   }
