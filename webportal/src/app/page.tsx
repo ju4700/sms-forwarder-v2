@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import QRCode from "qrcode.react";
+import { QRCodeCanvas } from "qrcode.react";
 import styles from "./portal.module.css";
 
 type PairingStart = {
@@ -101,7 +101,7 @@ export default function Home() {
 
             <div className={styles.qrBox}>
               {pairing ? (
-                <QRCode value={pairing.qrPayload} size={220} />
+                <QRCodeCanvas value={pairing.qrPayload} size={220} />
               ) : (
                 <div className={styles.helper}>Preparing QR code...</div>
               )}
