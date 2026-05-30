@@ -16,7 +16,8 @@ export async function POST(request: Request) {
 
   const body = await request.json().catch(() => ({}));
   const deviceId = body?.deviceId ? String(body.deviceId).trim() : "";
-  const pin = body?.pin ? String(body.pin).trim() : "";
+  const rawPin = body?.pin ? String(body.pin).trim() : "";
+  const pin = rawPin.replace(/\D/g, "");
 
   if (!deviceId || !pin) {
     return NextResponse.json({ error: "deviceId and pin are required" }, { status: 400 });

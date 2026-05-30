@@ -63,7 +63,16 @@ export default function PortalPage({ params }: Props) {
     });
 
     if (!response.ok) {
-      setError("Invalid PIN. Try again.");
+      let message = "Invalid PIN. Try again.";
+      try {
+        const payload = (await response.json()) as { error?: string };
+        if (payload.error) {
+          message = payload.error;
+        }
+      } catch {
+        // Ignore JSON parsing errors and fall back to the default message.
+      }
+      setError(message);
       setStatus("Enter PIN");
       return;
     }
