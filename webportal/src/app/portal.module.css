@@ -2,7 +2,7 @@
   min-height: 100vh;
   display: flex;
   justify-content: center;
-  padding: 24px 24px 48px;
+  padding: 24px 24px 64px;
   background: var(--background);
   color: var(--foreground);
 }
@@ -10,6 +10,7 @@
 .shell {
   width: min(1100px, 100%);
   display: grid;
+  align-content: start;
   gap: 16px;
 }
 
@@ -23,12 +24,13 @@
 .brand {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
 }
 
 .title {
   font-size: clamp(28px, 3vw, 40px);
   font-weight: 600;
+  line-height: 1.1;
   letter-spacing: -0.02em;
 }
 
@@ -50,7 +52,7 @@
 
 .grid {
   display: grid;
-  gap: 16px;
+  gap: 22px;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
 }
 
@@ -69,7 +71,7 @@
 .cardTitle {
   font-size: 18px;
   font-weight: 600;
-  margin-bottom: 8px;
+  margin-bottom: 10px;
 }
 
 .helper {
@@ -86,11 +88,7 @@
   border-radius: 0;
   padding: 18px;
   border: 1px dashed var(--border);
-  margin-top: 14px;
-}
-
-.pairingCode {
-  margin-top: 12px;
+  margin-top: 18px;
 }
 
 .code {
@@ -187,7 +185,7 @@
 
 @media (max-width: 720px) {
   .page {
-    padding: 20px 16px 40px;
+    padding: 32px 18px 48px;
   }
 
   .topBar {
