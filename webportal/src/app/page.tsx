@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { QRCodeCanvas } from "qrcode.react";
 import styles from "./portal.module.css";
 
@@ -16,22 +17,17 @@ type PairingStatus = {
 };
 
 export default function Home() {
+  const router = useRouter();
   const [pairing, setPairing] = useState<PairingStart | null>(null);
-  const [deviceId, setDeviceId] = useState<string>("");
-  const [status, setStatus] = useState<string>("Starting");
-  const [error, setError] = useState<string>("");
-
-  const portalLink = useMemo(() => {
-    if (!deviceId) {
-      return "";
-    }
-    return `/p/${deviceId}`;
-  }, [deviceId]);
+  const [pairingStatus, setPairingStatus] = useState<string>("Ready");
+  const [pairingError, setPairingError] = useState<string>("");
+  const [pin, setPin] = useState<string>("");
+  const [pinStatus, setPinStatus] = useState<string>("Enter PIN");
+  const [pinError, setPinError] = useState<string>("");
 
   async function startPairing() {
-    setError("");
-    setStatus("Generating QR");
-    setDeviceId("");
+    setPairingError("");
+    setPairingStatus("Generating QR");
     setPairing(null);
 
     try {
@@ -49,29 +45,58 @@ export default function Home() {
         } catch {
           // Ignore JSON parsing errors and fall back to the default message.
         }
-        setError(message);
-        setStatus("Error");
+        setPairingError(message);
+        setPairingStatus("Error");
         return;
       }
 
       const payload = (await response.json()) as PairingStart;
       setPairing(payload);
-      setStatus("Waiting for scan");
+      setPairingStatus("Waiting for scan");
     } catch {
-      setError("Failed to reach the pairing service.");
-      setStatus("Offline");
+      setPairingError("Failed to reach the pairing service.");
+      setPairingStatus("Offline");
     }
   }
 
-  useEffect(() => {
-    const saved = localStorage.getItem("portalDeviceId");
-    if (saved) {
-      setDeviceId(saved);
-      setStatus("Previously paired");
-    } else {
-      void startPairing();
+  async function verifyPin() {
+    setPinError("");
+    setPinStatus("Verifying");
+
+    const response = await fetch("/api/pin/verify", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ pin }),
+    });
+
+    if (!response.ok) {
+      let message = "Invalid PIN. Try again.";
+      try {
+        const payload = (await response.json()) as { error?: string };
+        if (payload.error) {
+          message = payload.error;
+        }
+      } catch {
+        // Ignore JSON parsing errors and fall back to the default message.
+      }
+      setPinError(message);
+      setPinStatus("Enter PIN");
+      return;
     }
-  }, []);
+
+    const payload = (await response.json()) as { deviceId?: string };
+    const deviceId = payload.deviceId?.toString().trim() ?? "";
+    if (!deviceId) {
+      setPinError("Unable to resolve a device for this PIN.");
+      setPinStatus("Enter PIN");
+      return;
+    }
+
+    setPinStatus("Unlocked");
+    router.push(`/p/${deviceId}`);
+  }
 
   useEffect(() => {
     if (!pairing) {
@@ -86,15 +111,13 @@ export default function Home() {
         }
         const data = (await response.json()) as PairingStatus;
         if (data.status == "claimed" && data.deviceId) {
-          setDeviceId(data.deviceId);
-          localStorage.setItem("portalDeviceId", data.deviceId);
-          setStatus("Paired");
+          setPairingStatus("Paired");
         }
         if (data.status == "expired") {
-          setStatus("Expired");
+          setPairingStatus("Expired");
         }
       } catch {
-        setStatus("Offline");
+        setPairingStatus("Offline");
       }
     }, 2000);
 
@@ -108,99 +131,66 @@ export default function Home() {
           <div className={styles.brand}>
             <div className={styles.title}>SMS Portal</div>
             <div className={styles.subtitle}>
-              Pair a phone to view messages securely in your browser.
+              Enter your PIN to unlock messages or pair a phone.
             </div>
           </div>
-          <div className={styles.statusPill}>{status}</div>
+          <div className={styles.statusPill}>{pairing ? pairingStatus : "Ready"}</div>
         </div>
 
         <div className={styles.grid}>
-          {status === "Previously paired" ? (
-            <section className={styles.card} style={{ gridColumn: "1 / -1" }}>
-              <div className={styles.cardTitle} style={{ textAlign: "center" }}>Device Linked</div>
-              <div className={styles.helper} style={{ textAlign: "center" }}>
-                You have previously paired a device. To view your messages, please open the portal and enter your PIN.
-              </div>
-              <div className={styles.actions} style={{ justifyContent: "center", marginTop: "2rem" }}>
-                <a className={styles.button} href={portalLink}>
-                  Unlock Portal
-                </a>
-                <button
-                  className={`${styles.button} ${styles.buttonSecondary}`}
-                  type="button"
-                  onClick={() => {
-                    setDeviceId("");
-                    localStorage.removeItem("portalDeviceId");
-                    void startPairing();
-                  }}
-                >
-                  Pair a new device
-                </button>
-              </div>
-            </section>
-          ) : (
-            <>
-              <section className={styles.card}>
-                <div className={styles.cardTitle}>1. Scan this QR code</div>
-                <div className={styles.helper}>
-                  Open the Portal screen on your phone and scan the QR to pair.
-                </div>
+          <section className={styles.card}>
+            <div className={styles.cardTitle}>Unlock messages</div>
+            <div className={styles.helper}>
+              Enter the 8-digit PIN shown on your phone to unlock messages.
+            </div>
+            <input
+              className={styles.input}
+              value={pin}
+              onChange={(event) => setPin(event.target.value.replace(/\D/g, ""))}
+              placeholder="8-digit PIN"
+              inputMode="numeric"
+              maxLength={8}
+            />
+            <div className={styles.actions}>
+              <button className={styles.button} type="button" onClick={verifyPin}>
+                Unlock messages
+              </button>
+            </div>
+            {pinError ? <div className={styles.helper}>{pinError}</div> : null}
+            <div className={styles.helper}>{pinStatus}</div>
+          </section>
 
-                <div className={styles.qrBox}>
-                  {pairing ? (
-                    <QRCodeCanvas value={pairing.qrPayload} size={220} />
-                  ) : (
-                    <div className={styles.helper}>Preparing QR code...</div>
-                  )}
-                </div>
+          <section className={`${styles.card} ${styles.cardMuted}`}>
+            <div className={styles.cardTitle}>Pair a phone</div>
+            <div className={styles.helper}>
+              Scan the QR code on your phone to generate a new PIN.
+            </div>
 
-                {pairing ? (
-                  <p className={styles.helper}>
-                    Pairing code: <span className={styles.code}>{pairing.pairingId}</span>
-                  </p>
-                ) : null}
+            <div className={styles.qrBox}>
+              {pairing ? (
+                <QRCodeCanvas value={pairing.qrPayload} size={220} />
+              ) : (
+                <div className={styles.helper}>Tap “Pair a phone” to start.</div>
+              )}
+            </div>
 
-                <div className={styles.actions}>
-                  <button className={styles.button} type="button" onClick={startPairing}>
-                    Refresh QR
-                  </button>
-                  {portalLink ? (
-                    <a className={`${styles.button} ${styles.buttonSecondary}`} href={portalLink}>
-                      Open portal
-                    </a>
-                  ) : null}
-                </div>
-                {error ? <p className={styles.helper}>{error}</p> : null}
-              </section>
+            {pairing ? (
+              <p className={styles.helper}>
+                Pairing code: <span className={styles.code}>{pairing.pairingId}</span>
+              </p>
+            ) : null}
 
-              <section className={`${styles.card} ${styles.cardMuted}`}>
-                <div className={styles.cardTitle}>2. Confirm PIN on device</div>
-                <div className={styles.helper}>
-                  After pairing, the phone shows a PIN. You will need that PIN to
-                  access the messages.
-                </div>
+            {pairingStatus === "Paired" ? (
+              <div className={styles.helper}>Paired. Enter the PIN on the left.</div>
+            ) : null}
 
-                {deviceId ? (
-                  <div className={styles.helper}>
-                    Device linked: <span className={styles.code}>{deviceId}</span>
-                  </div>
-                ) : (
-                  <div className={styles.helper}>Waiting for device confirmation.</div>
-                )}
-
-                <div className={styles.actions}>
-                  <a
-                    className={`${styles.button} ${styles.buttonSecondary}`}
-                    href="https://support.google.com/android/answer/9777309"
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    Battery tips
-                  </a>
-                </div>
-              </section>
-            </>
-          )}
+            <div className={styles.actions}>
+              <button className={styles.button} type="button" onClick={startPairing}>
+                {pairing ? "Refresh QR" : "Pair a phone"}
+              </button>
+            </div>
+            {pairingError ? <p className={styles.helper}>{pairingError}</p> : null}
+          </section>
         </div>
       </div>
     </div>

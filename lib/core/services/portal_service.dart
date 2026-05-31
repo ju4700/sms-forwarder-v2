@@ -49,28 +49,39 @@ class PortalService {
     return Uri.parse('$base$path');
   }
 
-  Future<PortalPairingResult> claimPairing(String pairingId) async {
+  Future<PortalPairingResult> claimPairing(
+    String pairingId, {
+    String? deviceId,
+    String? deviceSecret,
+  }) async {
     final Uri url = _resolve('/api/pairing/claim');
+    final Map<String, dynamic> payload = <String, dynamic>{
+      'pairingId': pairingId,
+    };
+    if (deviceId != null && deviceId.isNotEmpty) {
+      payload['deviceId'] = deviceId;
+    }
+    if (deviceSecret != null && deviceSecret.isNotEmpty) {
+      payload['deviceSecret'] = deviceSecret;
+    }
     final http.Response response = await _client.post(
       url,
       headers: <String, String>{
         'Content-Type': 'application/json',
       },
-      body: jsonEncode(<String, dynamic>{
-        'pairingId': pairingId,
-      }),
+      body: jsonEncode(payload),
     );
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw Exception('Pairing failed (${response.statusCode})');
     }
 
-    final Map<String, dynamic> payload =
+    final Map<String, dynamic> responsePayload =
         jsonDecode(response.body) as Map<String, dynamic>;
     return PortalPairingResult(
-      deviceId: payload['deviceId']?.toString() ?? '',
-      deviceSecret: payload['deviceSecret']?.toString() ?? '',
-      pin: payload['pin']?.toString() ?? '',
+      deviceId: responsePayload['deviceId']?.toString() ?? '',
+      deviceSecret: responsePayload['deviceSecret']?.toString() ?? '',
+      pin: responsePayload['pin']?.toString() ?? '',
     );
   }
 

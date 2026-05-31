@@ -59,7 +59,13 @@ class _PortalScreenState extends State<PortalScreen> {
         return;
       }
 
-      final PortalPairingResult result = await _portalService.claimPairing(pairingId.trim());
+      final String existingDeviceId = widget.controller.portalDeviceId;
+      final String existingSecret = widget.controller.settings.portalDeviceSecret;
+      final PortalPairingResult result = await _portalService.claimPairing(
+        pairingId.trim(),
+        deviceId: existingDeviceId,
+        deviceSecret: existingSecret,
+      );
       if (result.deviceId.isEmpty || result.deviceSecret.isEmpty || result.pin.isEmpty) {
         throw Exception('Invalid pairing payload');
       }
@@ -180,9 +186,11 @@ class _PortalScreenState extends State<PortalScreen> {
               ),
               const SizedBox(height: 12),
               if (paired) ...<Widget>[
-                Text('PIN: $pin', style: const TextStyle(fontWeight: FontWeight.bold)),
+                Text('PIN (8 digits): $pin', style: const TextStyle(fontWeight: FontWeight.bold)),
                 const SizedBox(height: 6),
                 Text('Portal URL: ${PortalConfig.baseUrl}'),
+                const SizedBox(height: 6),
+                const Text('Open the portal and enter the PIN to unlock messages.'),
               ],
               const SizedBox(height: 12),
               Wrap(

@@ -30,60 +30,63 @@ function formatTime(value: string): string {
 
 export default function PortalPage({ params }: Props) {
   const deviceId = params.deviceId;
-  const [pin, setPin] = useState("");
-  const [verified, setVerified] = useState(false);
+  const [authorized, setAuthorized] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
-  const [status, setStatus] = useState("Enter PIN");
+  const [status, setStatus] = useState("Checking session");
   const [error, setError] = useState("");
   const [online, setOnline] = useState(true);
 
   const latestMessage = useMemo(() => messages[0], [messages]);
 
-  async function fetchMessages() {
+  async function fetchMessages(): Promise<boolean> {
     const response = await fetch(`/api/messages?deviceId=${deviceId}&limit=200`);
     if (!response.ok) {
-      setError("Failed to load messages.");
-      return;
-    }
-
-    const data = (await response.json()) as { messages: Message[] };
-    setMessages(data.messages ?? []);
-  }
-
-  async function verifyPin() {
-    setError("");
-    setStatus("Verifying");
-
-    const response = await fetch("/api/pin/verify", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ deviceId, pin }),
-    });
-
-    if (!response.ok) {
-      let message = "Invalid PIN. Try again.";
+      let message = "Enter your PIN on the main page to unlock messages.";
       try {
         const payload = (await response.json()) as { error?: string };
-        if (payload.error) {
+        if (payload.error && payload.error !== "unauthorized" && payload.error !== "forbidden") {
           message = payload.error;
         }
       } catch {
         // Ignore JSON parsing errors and fall back to the default message.
       }
       setError(message);
-      setStatus("Enter PIN");
-      return;
+      return false;
     }
 
-    setVerified(true);
-    setStatus("Connected");
-    await fetchMessages();
+    const data = (await response.json()) as { messages: Message[] };
+    setMessages(data.messages ?? []);
+    return true;
   }
 
   useEffect(() => {
-    if (!verified) {
+    let active = true;
+    setError("");
+    setStatus("Checking session");
+
+    void (async () => {
+      const ok = await fetchMessages();
+      if (!active) {
+        return;
+      }
+      if (ok) {
+        setAuthorized(true);
+        setStatus("Connected");
+        setOnline(true);
+      } else {
+        setAuthorized(false);
+        setStatus("Enter PIN on the main page");
+        setOnline(false);
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [deviceId]);
+
+  useEffect(() => {
+    if (!authorized) {
       return;
     }
 
@@ -119,10 +122,10 @@ export default function PortalPage({ params }: Props) {
       source.removeEventListener("status", onStatus);
       source.close();
     };
-  }, [deviceId, verified]);
+  }, [deviceId, authorized]);
 
   useEffect(() => {
-    if (!verified) {
+    if (!authorized) {
       return;
     }
 
@@ -131,7 +134,7 @@ export default function PortalPage({ params }: Props) {
     }, 15000);
 
     return () => clearInterval(interval);
-  }, [verified]);
+  }, [authorized]);
 
   return (
     <div className={styles.page}>
@@ -144,25 +147,19 @@ export default function PortalPage({ params }: Props) {
           <div className={styles.statusPill}>{online ? "Live" : "Offline"}</div>
         </div>
 
-        {!verified ? (
+        {!authorized ? (
           <section className={styles.card}>
-            <div className={styles.cardTitle}>Enter your PIN</div>
+            <div className={styles.cardTitle}>Unlock required</div>
             <div className={styles.helper}>
-              The PIN appears on your phone after pairing.
+              Enter your PIN on the main page to unlock this device.
             </div>
-            <input
-              className={styles.input}
-              value={pin}
-              onChange={(event) => setPin(event.target.value.replace(/\D/g, ""))}
-              placeholder="6-digit PIN"
-              inputMode="numeric"
-            />
             <div className={styles.actions}>
-              <button className={styles.button} onClick={verifyPin} type="button">
-                Unlock messages
-              </button>
+              <a className={styles.button} href="/">
+                Go to PIN entry
+              </a>
             </div>
             {error ? <div className={styles.helper}>{error}</div> : null}
+            <div className={styles.helper}>{status}</div>
           </section>
         ) : (
           <section className={styles.card}>

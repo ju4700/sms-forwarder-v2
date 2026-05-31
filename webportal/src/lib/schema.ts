@@ -1,4 +1,4 @@
-import { execute } from "@/lib/db";
+import { execute, query } from "@/lib/db";
 
 let initialized = false;
 
@@ -17,6 +17,20 @@ export async function ensureSchema(): Promise<void> {
       pin_updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
+
+  const pinLookupColumn = await query<{ COLUMN_NAME: string }[]>(
+    "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'devices' AND COLUMN_NAME = 'pin_lookup'",
+  );
+  if (pinLookupColumn.length === 0) {
+    await execute("ALTER TABLE devices ADD COLUMN pin_lookup CHAR(64) NULL");
+  }
+
+  const pinLookupIndex = await query<{ INDEX_NAME: string }[]>(
+    "SELECT INDEX_NAME FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'devices' AND INDEX_NAME = 'idx_devices_pin_lookup'",
+  );
+  if (pinLookupIndex.length === 0) {
+    await execute("CREATE UNIQUE INDEX idx_devices_pin_lookup ON devices (pin_lookup)");
+  }
 
   await execute(`
     CREATE TABLE IF NOT EXISTS pairing_sessions (

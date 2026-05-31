@@ -4,10 +4,20 @@ import { cookies } from "next/headers";
 
 const TOKEN_TTL_SECONDS = 12 * 60 * 60;
 
+const PIN_LENGTH = 8;
+
 function getTokenSecret(): string {
   const secret = process.env.PORTAL_TOKEN_SECRET;
   if (!secret) {
     throw new Error("PORTAL_TOKEN_SECRET is not set");
+  }
+  return secret;
+}
+
+function getPinSecret(): string {
+  const secret = process.env.PORTAL_PIN_SECRET;
+  if (!secret) {
+    throw new Error("PORTAL_PIN_SECRET is not set");
   }
   return secret;
 }
@@ -116,6 +126,21 @@ export async function hashSecret(secret: string): Promise<string> {
 
 export async function verifySecret(secret: string, hash: string): Promise<boolean> {
   return bcrypt.compare(secret, hash);
+}
+
+export function normalizePin(value: string): string {
+  return value.replace(/\D/g, "");
+}
+
+export function isValidPin(pin: string): boolean {
+  return pin.length === PIN_LENGTH;
+}
+
+export function buildPinLookup(pin: string): string {
+  return crypto
+    .createHmac("sha256", getPinSecret())
+    .update(pin)
+    .digest("hex");
 }
 
 export function sessionCookieOptions() {
