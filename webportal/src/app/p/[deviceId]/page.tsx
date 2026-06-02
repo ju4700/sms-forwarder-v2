@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useParams } from "next/navigation";
 import styles from "../../portal.module.css";
 
 type Message = {
@@ -9,12 +10,6 @@ type Message = {
   body: string;
   direction: "incoming" | "outgoing";
   sentAt: string;
-};
-
-type Props = {
-  params: {
-    deviceId: string;
-  };
 };
 
 function formatTime(value: string): string {
@@ -28,8 +23,12 @@ function formatTime(value: string): string {
   }).format(date);
 }
 
-export default function PortalPage({ params }: Props) {
-  const deviceId = params.deviceId;
+export default function PortalPage() {
+  const params = useParams<{ deviceId?: string | string[] }>();
+  const deviceIdParam = params?.deviceId;
+  const deviceId = Array.isArray(deviceIdParam)
+    ? deviceIdParam[0] ?? ""
+    : (deviceIdParam ?? "");
   const [authorized, setAuthorized] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [status, setStatus] = useState("Checking session");
@@ -65,6 +64,12 @@ export default function PortalPage({ params }: Props) {
     setStatus("Checking session");
 
     void (async () => {
+      if (!deviceId) {
+        setAuthorized(false);
+        setStatus("Missing device id");
+        setOnline(false);
+        return;
+      }
       // Sometimes the session cookie is set just before we land on this page.
       // Do a couple quick retries so we don't get stuck on the unlock screen.
       let ok = false;
