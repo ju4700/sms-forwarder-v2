@@ -143,11 +143,11 @@ export function buildPinLookup(pin: string): string {
     .digest("hex");
 }
 
-export function sessionCookieOptions() {
+export function sessionCookieOptions({ secure }: { secure: boolean }) {
   return {
     httpOnly: true,
     sameSite: "lax" as const,
-    secure: process.env.NODE_ENV == "production",
+    secure,
     path: "/",
     maxAge: TOKEN_TTL_SECONDS,
   };

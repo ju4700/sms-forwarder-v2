@@ -87,7 +87,23 @@ export async function POST(request: Request) {
 
   const token = createSessionToken(row.id);
   const response = NextResponse.json({ ok: true, deviceId: row.id });
-  response.cookies.set("portal_session", token, sessionCookieOptions());
+  const forwardedProto = request.headers.get("x-forwarded-proto");
+  let isSecure = false;
+  if (forwardedProto) {
+    isSecure = forwardedProto.toLowerCase().includes("https");
+  } else {
+    try {
+      isSecure = new URL(request.url).protocol === "https:";
+    } catch {
+      // If request.url isn't absolute (unusual), fall back to non-secure cookies.
+      isSecure = false;
+    }
+  }
+  response.cookies.set(
+    "portal_session",
+    token,
+    sessionCookieOptions({ secure: isSecure }),
+  );
 
   return response;
 }
