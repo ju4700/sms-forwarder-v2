@@ -65,7 +65,14 @@ export default function PortalPage({ params }: Props) {
     setStatus("Checking session");
 
     void (async () => {
-      const ok = await fetchMessages();
+      // Sometimes the session cookie is set just before we land on this page.
+      // Do a couple quick retries so we don't get stuck on the unlock screen.
+      let ok = false;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        ok = await fetchMessages();
+        if (ok) break;
+        await new Promise((resolve) => setTimeout(resolve, attempt * 300));
+      }
       if (!active) {
         return;
       }

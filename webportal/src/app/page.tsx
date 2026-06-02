@@ -95,7 +95,9 @@ export default function Home() {
     }
 
     setPinStatus("Unlocked");
-    router.push(`/p/${deviceId}`);
+    // Force a full page load so the browser definitely persists/stsart sending
+    // the HttpOnly `portal_session` cookie before we make authenticated calls.
+    window.location.assign(`/p/${deviceId}`);
   }
 
   useEffect(() => {
