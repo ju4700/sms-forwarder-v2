@@ -9,6 +9,7 @@ class AppSettings {
     required this.portalDeviceSecret,
     required this.portalPin,
     required this.portalPairedAt,
+    required this.portalLastInboxSyncAt,
   });
 
   final String apiEndpoint;
@@ -18,6 +19,7 @@ class AppSettings {
   final String portalDeviceSecret;
   final String portalPin;
   final int portalPairedAt;
+  final int portalLastInboxSyncAt;
 
   AppSettings copyWith({
     String? apiEndpoint,
@@ -27,6 +29,7 @@ class AppSettings {
     String? portalDeviceSecret,
     String? portalPin,
     int? portalPairedAt,
+    int? portalLastInboxSyncAt,
   }) {
     return AppSettings(
       apiEndpoint: apiEndpoint ?? this.apiEndpoint,
@@ -37,6 +40,7 @@ class AppSettings {
       portalDeviceSecret: portalDeviceSecret ?? this.portalDeviceSecret,
       portalPin: portalPin ?? this.portalPin,
       portalPairedAt: portalPairedAt ?? this.portalPairedAt,
+      portalLastInboxSyncAt: portalLastInboxSyncAt ?? this.portalLastInboxSyncAt,
     );
   }
 }
@@ -53,6 +57,7 @@ class SettingsService {
   static const String _kPortalDeviceSecret = 'portal_device_secret';
   static const String _kPortalPin = 'portal_pin';
   static const String _kPortalPairedAt = 'portal_paired_at';
+  static const String _kPortalLastInboxSyncAt = 'portal_last_inbox_sync_at';
   static const String _kInboxImported = 'inbox_imported';
 
   Future<AppSettings> load() async {
@@ -65,6 +70,7 @@ class SettingsService {
       portalDeviceSecret: prefs.getString(_kPortalDeviceSecret) ?? '',
       portalPin: prefs.getString(_kPortalPin) ?? '',
       portalPairedAt: prefs.getInt(_kPortalPairedAt) ?? 0,
+      portalLastInboxSyncAt: prefs.getInt(_kPortalLastInboxSyncAt) ?? 0,
     );
   }
 
@@ -80,6 +86,7 @@ class SettingsService {
     );
     await prefs.setString(_kPortalPin, settings.portalPin.trim());
     await prefs.setInt(_kPortalPairedAt, settings.portalPairedAt);
+    await prefs.setInt(_kPortalLastInboxSyncAt, settings.portalLastInboxSyncAt);
   }
 
   Future<bool> hasImportedInbox() async {

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:async';
 
 import 'package:http/http.dart' as http;
 
@@ -43,6 +44,8 @@ class PortalService {
   PortalService({http.Client? client}) : _client = client ?? http.Client();
 
   final http.Client _client;
+  static const Duration _requestTimeout = Duration(seconds: 30);
+  static const int _bulkChunkSize = 100;
 
   Uri _resolve(String path) {
     final String base = PortalConfig.baseUrl.replaceAll(RegExp(r'/+$'), '');
@@ -95,20 +98,38 @@ class PortalService {
     }
 
     final Uri url = _resolve('/api/messages/bulk');
-    final http.Response response = await _client.post(
-      url,
-      headers: <String, String>{
-        'Content-Type': 'application/json',
-        'x-device-id': deviceId,
-        'x-device-secret': deviceSecret,
-      },
-      body: jsonEncode(<String, dynamic>{
-        'messages': messages.map((PortalMessage message) => message.toJson()).toList(),
-      }),
-    );
+    for (int start = 0; start < messages.length; start += _bulkChunkSize) {
+      final int end = (start + _bulkChunkSize < messages.length)
+          ? start + _bulkChunkSize
+          : messages.length;
+      final List<PortalMessage> chunk = messages.sublist(start, end);
 
-    if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw Exception('Bulk upload failed (${response.statusCode})');
+      late final http.Response response;
+      try {
+        response = await _client
+            .post(
+              url,
+              headers: <String, String>{
+                'Content-Type': 'application/json',
+                'x-device-id': deviceId,
+                'x-device-secret': deviceSecret,
+              },
+              body: jsonEncode(<String, dynamic>{
+                'messages': chunk
+                    .map((PortalMessage message) => message.toJson())
+                    .toList(),
+              }),
+            )
+            .timeout(_requestTimeout);
+      } on TimeoutException {
+        throw Exception(
+          'Portal request timed out while uploading messages. Check internet and retry.',
+        );
+      }
+
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw Exception('Bulk upload failed (${response.statusCode})');
+      }
     }
   }
 }

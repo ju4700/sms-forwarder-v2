@@ -26,6 +26,7 @@ class AppController extends ChangeNotifier {
     portalDeviceSecret: '',
     portalPin: '',
     portalPairedAt: 0,
+    portalLastInboxSyncAt: 0,
   );
   bool _ready = false;
   bool _permissionsGranted = false;
@@ -66,6 +67,7 @@ class AppController extends ChangeNotifier {
           portalDeviceSecret: '',
           portalPin: '',
           portalPairedAt: 0,
+          portalLastInboxSyncAt: 0,
         );
       }
 
@@ -235,9 +237,18 @@ class AppController extends ChangeNotifier {
       portalDeviceSecret: '',
       portalPin: '',
       portalPairedAt: 0,
+      portalLastInboxSyncAt: 0,
     );
     await SettingsService.instance.save(_settings);
     await _smsCaptureService.triggerNativeSync();
+    notifyListeners();
+  }
+
+  Future<void> savePortalInboxSyncAt(int timestamp) async {
+    _settings = _settings.copyWith(
+      portalLastInboxSyncAt: timestamp,
+    );
+    await SettingsService.instance.save(_settings);
     notifyListeners();
   }
 

@@ -34,6 +34,7 @@ export default function PortalPage() {
   const [status, setStatus] = useState("Checking session");
   const [error, setError] = useState("");
   const [online, setOnline] = useState(true);
+  const [closingSession, setClosingSession] = useState(false);
 
   const latestMessage = useMemo(() => messages[0], [messages]);
 
@@ -148,6 +149,24 @@ export default function PortalPage() {
     return () => clearInterval(interval);
   }, [authorized]);
 
+  async function closeConnection() {
+    if (closingSession) {
+      return;
+    }
+
+    setClosingSession(true);
+    setError("");
+    try {
+      await fetch("/api/pin/close", {
+        method: "POST",
+      });
+    } catch {
+      // Even if request fails, move user to PIN page to avoid stuck session UI.
+    } finally {
+      window.location.assign("/");
+    }
+  }
+
   return (
     <div className={styles.page}>
       <div className={styles.shell}>
@@ -177,6 +196,11 @@ export default function PortalPage() {
           <section className={styles.card}>
             <div className={styles.cardTitle}>Messages</div>
             <div className={styles.helper}>{status}</div>
+            <div className={styles.actions}>
+              <button className={styles.buttonSecondary} type="button" onClick={closeConnection}>
+                {closingSession ? "Closing..." : "Close connection"}
+              </button>
+            </div>
 
             {messages.length == 0 ? (
               <div className={styles.empty}>No messages yet.</div>

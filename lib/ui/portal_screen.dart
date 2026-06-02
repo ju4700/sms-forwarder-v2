@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
@@ -111,6 +112,7 @@ class _PortalScreenState extends State<PortalScreen> {
         return;
       }
 
+      final int lastSyncedAt = widget.controller.settings.portalLastInboxSyncAt;
       final List<PortalMessage> messages = rows.map((Map<String, dynamic> row) {
         final String address = (row['address'] as String? ?? '').trim();
         final String body = (row['body'] as String? ?? '').trim();
@@ -126,18 +128,34 @@ class _PortalScreenState extends State<PortalScreen> {
           direction: incoming ? 'incoming' : 'outgoing',
         );
       }).where((PortalMessage message) {
-        return message.address.isNotEmpty && message.body.isNotEmpty;
+        return message.address.isNotEmpty &&
+            message.body.isNotEmpty &&
+            message.timestamp > lastSyncedAt;
       }).toList(growable: false);
+
+      if (messages.isEmpty) {
+        setState(() => _error = 'No new inbox messages to upload.');
+        return;
+      }
 
       await _portalService.uploadMessagesBulk(
         deviceId: deviceId,
         deviceSecret: secret,
         messages: messages,
       );
+
+      final int latestTimestamp = messages
+          .map((PortalMessage message) => message.timestamp)
+          .reduce((int a, int b) => a > b ? a : b);
+      await widget.controller.savePortalInboxSyncAt(latestTimestamp);
     } catch (e) {
       if (mounted) {
+        String message = e.toString();
+        if (e is SocketException) {
+          message = 'Network timeout. Check internet and portal URL, then retry.';
+        }
         setState(() {
-          _error = 'Inbox sync failed: ${e.toString()}';
+          _error = 'Inbox sync failed: $message';
         });
       }
     } finally {
