@@ -13,12 +13,22 @@ import androidx.core.app.NotificationCompat
 import android.content.Context
 
 class SmsMonitorService : Service() {
+    private var wakeLock: android.os.PowerManager.WakeLock? = null
+
     override fun onBind(intent: Intent?): IBinder? {
         return null
     }
 
     override fun onCreate() {
         super.onCreate()
+        
+        val powerManager = getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+        wakeLock = powerManager.newWakeLock(
+            android.os.PowerManager.PARTIAL_WAKE_LOCK,
+            "SmsForwarder::MonitorWakeLock"
+        )
+        wakeLock?.acquire()
+        
         createNotificationChannel()
         try {
             val notification = buildNotification()
@@ -32,6 +42,7 @@ class SmsMonitorService : Service() {
                 startForeground(NOTIFICATION_ID, notification)
             }
             Log.d("SmsMonitorService", "Foreground service started")
+            scheduleHeartbeat()
         } catch (e: Exception) {
             Log.e("SmsMonitorService", "Failed to start foreground service: ${e.message}", e)
             stopSelf()
@@ -39,6 +50,7 @@ class SmsMonitorService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        scheduleHeartbeat()
         return START_STICKY
     }
 
@@ -56,6 +68,52 @@ class SmsMonitorService : Service() {
         } else {
             startService(restartIntent)
         }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        if (wakeLock?.isHeld == true) {
+            wakeLock?.release()
+        }
+        cancelHeartbeat()
+    }
+
+    private fun scheduleHeartbeat() {
+        val alarmManager = getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+        val intent = Intent(this, HeartbeatReceiver::class.java)
+        val pendingIntent = android.app.PendingIntent.getBroadcast(
+            this,
+            0,
+            intent,
+            android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+        )
+        val triggerTime = System.currentTimeMillis() + 15 * 60 * 1000 // 15 minutes
+        
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            alarmManager.setExactAndAllowWhileIdle(
+                android.app.AlarmManager.RTC_WAKEUP,
+                triggerTime,
+                pendingIntent
+            )
+        } else {
+            alarmManager.setExact(
+                android.app.AlarmManager.RTC_WAKEUP,
+                triggerTime,
+                pendingIntent
+            )
+        }
+    }
+
+    private fun cancelHeartbeat() {
+        val alarmManager = getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+        val intent = Intent(this, HeartbeatReceiver::class.java)
+        val pendingIntent = android.app.PendingIntent.getBroadcast(
+            this,
+            0,
+            intent,
+            android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+        )
+        alarmManager.cancel(pendingIntent)
     }
 
     private fun createNotificationChannel() {
