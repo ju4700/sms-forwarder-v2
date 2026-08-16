@@ -59,7 +59,6 @@ class SmsForwardWorker(
             Log.d("SmsForwardWorker", "Processing ${queue.size} items, max retries=$maxAttempts")
 
             val now = System.currentTimeMillis()
-            val updated = mutableListOf<JSONObject>()
             var shouldRetryWorker = false
             var processedCount = 0
             var deliveredCount = 0
@@ -78,14 +77,12 @@ class SmsForwardWorker(
 
                     val status = item.optString("status", "pending")
                     if (status == "failed" || status == "dead_letter" || status == "delivered") {
-                        updated.add(item)
                         return@forEach
                     }
 
                     if (endpoint.isBlank()) {
                         item.put("status", "captured")
                         item.put("lastEvent", "Captured (endpoint not set)")
-                        updated.add(item)
                         return@forEach
                     }
 
@@ -94,13 +91,11 @@ class SmsForwardWorker(
                     if (!shouldForward) {
                         item.put("status", "captured")
                         item.put("lastEvent", "Captured (rule mismatch)")
-                        updated.add(item)
                         return@forEach
                     }
 
                     val nextRetryAt = item.optLong("nextRetryAt", 0L)
                     if (nextRetryAt > now) {
-                        updated.add(item)
                         shouldRetryWorker = true
                         return@forEach
                     }
@@ -113,7 +108,6 @@ class SmsForwardWorker(
                         item.put("forward", false)
                         item.put("nextRetryAt", 0L)
                         item.put("lastEvent", "Captured (parser mismatch)")
-                        updated.add(item)
                         return@forEach
                     }
 
@@ -132,7 +126,6 @@ class SmsForwardWorker(
                         item.put("status", "delivered")
                         item.put("nextRetryAt", 0L)
                         item.put("lastEvent", "Delivered ${parsed.trxId} (HTTP $sent)")
-                        updated.add(item)
                         deliveredCount++
                         return@forEach
                     }
@@ -143,7 +136,6 @@ class SmsForwardWorker(
                         item.put("attemptCount", attempts)
                         item.put("status", "failed")
                         item.put("lastEvent", "Failed ${parsed.trxId} (HTTP $sent)")
-                        updated.add(item)
                     } else if (attempts >= maxAttempts) {
                         Log.w("SmsForwardWorker", "Max attempts reached, dead-lettering")
                         item.put("attemptCount", attempts)
@@ -155,7 +147,6 @@ class SmsForwardWorker(
                             else
                                 "Failed ${parsed.trxId} (HTTP $sent)",
                         )
-                        updated.add(item)
                     } else {
                         val retryAt = now + computeBackoffMs(attempts)
                         Log.d("SmsForwardWorker", "Scheduled retry $attempts/$maxAttempts")
@@ -169,7 +160,6 @@ class SmsForwardWorker(
                             else
                                 "Retry ${parsed.trxId} (HTTP $sent)",
                         )
-                        updated.add(item)
                         shouldRetryWorker = true
                     }
                     processedCount++
@@ -180,12 +170,11 @@ class SmsForwardWorker(
                         item.put("status", "dead_letter")
                         item.put("lastError", "Processing error: ${e.message}")
                     } catch (_: Exception) {}
-                    updated.add(item)
+                } finally {
+                    runCatching { SmsQueueStore.writeQueue(applicationContext, queue) }
+                        .onFailure { e -> Log.e("SmsForwardWorker", "Failed to write queue: ${e.message}", e) }
                 }
             }
-
-            runCatching { SmsQueueStore.writeQueue(applicationContext, updated) }
-                .onFailure { e -> Log.e("SmsForwardWorker", "Failed to write queue: ${e.message}", e) }
 
             if (shouldRetryWorker) {
                 Log.d("SmsForwardWorker", "Scheduling immediate retry")
