@@ -22,7 +22,6 @@ object NativeWorkScheduler {
 
         val request = OneTimeWorkRequestBuilder<SmsForwardWorker>()
             .setConstraints(constraints)
-            .setExpedited(androidx.work.OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.SECONDS)
             .build()
 

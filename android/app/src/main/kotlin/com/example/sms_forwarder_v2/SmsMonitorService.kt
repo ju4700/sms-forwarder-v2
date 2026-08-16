@@ -79,28 +79,61 @@ class SmsMonitorService : Service() {
     }
 
     private fun scheduleHeartbeat() {
-        val alarmManager = getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
-        val intent = Intent(this, HeartbeatReceiver::class.java)
-        val pendingIntent = android.app.PendingIntent.getBroadcast(
-            this,
-            0,
-            intent,
-            android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
-        )
-        val triggerTime = System.currentTimeMillis() + 15 * 60 * 1000 // 15 minutes
-        
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            alarmManager.setExactAndAllowWhileIdle(
-                android.app.AlarmManager.RTC_WAKEUP,
-                triggerTime,
-                pendingIntent
+        try {
+            val alarmManager = getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+            val intent = Intent(this, HeartbeatReceiver::class.java)
+            val pendingIntent = android.app.PendingIntent.getBroadcast(
+                this,
+                0,
+                intent,
+                android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
             )
-        } else {
-            alarmManager.setExact(
-                android.app.AlarmManager.RTC_WAKEUP,
-                triggerTime,
-                pendingIntent
-            )
+            val triggerTime = System.currentTimeMillis() + 15 * 60 * 1000 // 15 minutes
+            
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                alarmManager.setExactAndAllowWhileIdle(
+                    android.app.AlarmManager.RTC_WAKEUP,
+                    triggerTime,
+                    pendingIntent
+                )
+            } else {
+                alarmManager.setExact(
+                    android.app.AlarmManager.RTC_WAKEUP,
+                    triggerTime,
+                    pendingIntent
+                )
+            }
+        } catch (e: SecurityException) {
+            Log.e("SmsMonitorService", "Cannot schedule exact alarm: ${e.message}. Falling back to inexact alarm.")
+            try {
+                val alarmManager = getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+                val intent = Intent(this, HeartbeatReceiver::class.java)
+                val pendingIntent = android.app.PendingIntent.getBroadcast(
+                    this,
+                    0,
+                    intent,
+                    android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+                )
+                val triggerTime = System.currentTimeMillis() + 15 * 60 * 1000
+                
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    alarmManager.setAndAllowWhileIdle(
+                        android.app.AlarmManager.RTC_WAKEUP,
+                        triggerTime,
+                        pendingIntent
+                    )
+                } else {
+                    alarmManager.set(
+                        android.app.AlarmManager.RTC_WAKEUP,
+                        triggerTime,
+                        pendingIntent
+                    )
+                }
+            } catch (fallbackEx: Exception) {
+                Log.e("SmsMonitorService", "Fallback inexact alarm also failed: ${fallbackEx.message}")
+            }
+        } catch (e: Exception) {
+            Log.e("SmsMonitorService", "Failed to schedule heartbeat: ${e.message}")
         }
     }
 
