@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../core/app_controller.dart';
 import '../core/models/queued_sms.dart';
@@ -14,6 +15,10 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   late final TextEditingController _endpointController;
+  late final TextEditingController _deviceController;
+  late final TextEditingController _walletController;
+  final TextEditingController _secretController = TextEditingController();
+  bool _saving = false;
   static const Color _electricBlue = Color(0xFF009BFF);
   static const Color _cardBorder = Color(0xFFD8ECFF);
   bool _retrying = false;
@@ -23,7 +28,15 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    _endpointController = TextEditingController();
+    _endpointController = TextEditingController(
+      text: widget.controller.settings.apiEndpoint,
+    );
+    _deviceController = TextEditingController(
+      text: widget.controller.settings.deviceId,
+    );
+    _walletController = TextEditingController(
+      text: widget.controller.settings.receivingAccount,
+    );
     widget.controller.addListener(_syncControllerText);
     _syncControllerText();
   }
@@ -32,14 +45,13 @@ class _HomeScreenState extends State<HomeScreen> {
   void dispose() {
     widget.controller.removeListener(_syncControllerText);
     _endpointController.dispose();
+    _deviceController.dispose();
+    _walletController.dispose();
+    _secretController.dispose();
     super.dispose();
   }
 
   void _syncControllerText() {
-    final String endpoint = widget.controller.settings.apiEndpoint;
-    if (_endpointController.text != endpoint) {
-      _endpointController.text = endpoint;
-    }
     if (mounted) {
       setState(() {});
     }
@@ -91,20 +103,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 : 'SMS permission: not granted',
           ),
           const SizedBox(height: 8),
-          Text(
-            controller.isDefaultSmsApp
-                ? 'Default SMS app: enabled'
-                : 'Default SMS app: not set',
-          ),
-          const SizedBox(height: 8),
-          if (!controller.isDefaultSmsApp)
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton(
-                onPressed: controller.requestDefaultSmsRole,
-                child: const Text('Set as Default SMS App'),
-              ),
-            ),
+          const Text('Receives bKash credit receipts from bKash / 16247 only.'),
         ],
       ),
     );
@@ -123,10 +122,7 @@ class _HomeScreenState extends State<HomeScreen> {
         children: <Widget>[
           Text(
             'Delivery Settings',
-            style: TextStyle(
-              color: _electricBlue,
-              fontWeight: FontWeight.w700,
-            ),
+            style: TextStyle(color: _electricBlue, fontWeight: FontWeight.w700),
           ),
           const SizedBox(height: 10),
           TextField(
@@ -138,27 +134,128 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ),
           const SizedBox(height: 10),
+          TextField(
+            controller: _deviceController,
+            decoration: const InputDecoration(
+              labelText: 'Device ID',
+              hintText: 'payment-phone-1',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _walletController,
+            keyboardType: TextInputType.phone,
+            decoration: const InputDecoration(
+              labelText: 'Receiving bKash number',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _secretController,
+            obscureText: true,
+            enableSuggestions: false,
+            autocorrect: false,
+            decoration: InputDecoration(
+              labelText: 'Device secret (64 hex characters)',
+              helperText: controller.settings.secretConfigured
+                  ? 'Saved securely. Leave empty to keep it.'
+                  : 'Use the secret configured on your server.',
+              border: const OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 10),
           SizedBox(
             width: double.infinity,
             child: ElevatedButton(
-              onPressed: () => controller.saveEndpoint(_endpointController.text),
-              child: const Text('Save Endpoint'),
+              onPressed: _saving
+                  ? null
+                  : () async {
+                      setState(() => _saving = true);
+                      try {
+                        await controller.saveDelivery(
+                          endpoint: _endpointController.text,
+                          deviceId: _deviceController.text,
+                          receivingAccount: _walletController.text,
+                          secret: _secretController.text,
+                        );
+                        _secretController.clear();
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Delivery settings saved'),
+                            ),
+                          );
+                        }
+                      } catch (e) {
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                e is PlatformException
+                                    ? e.message ??
+                                          'Could not save delivery settings'
+                                    : 'Could not save delivery settings',
+                              ),
+                            ),
+                          );
+                        }
+                      } finally {
+                        if (mounted) setState(() => _saving = false);
+                      }
+                    },
+              child: const Text('Save Delivery Settings'),
             ),
           ),
           const SizedBox(height: 6),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            value: controller.settings.foregroundReliabilityMode,
-            title: const Text('Foreground reliability mode'),
-            subtitle: const Text('Improves Android 13+ reliability with persistent notification.'),
-            onChanged: controller.setForegroundMode,
+          Material(
+            type: MaterialType.transparency,
+            child: SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              value: controller.settings.foregroundReliabilityMode,
+              title: const Text('Foreground reliability mode'),
+              subtitle: const Text(
+                'Shows a monitoring notification. Android may limit its duration.',
+              ),
+              onChanged: controller.setForegroundMode,
+            ),
+          ),
+          const SizedBox(height: 6),
+          OutlinedButton(
+            onPressed: controller.settings.secretConfigured
+                ? controller.recoverReceipts
+                : null,
+            child: const Text('Recover recent payment receipts'),
+          ),
+          const SizedBox(height: 6),
+          OutlinedButton(
+            onPressed: () async {
+              try {
+                await controller.disableBatteryOptimization();
+              } catch (_) {
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text(
+                        'Open Android battery settings for this app.',
+                      ),
+                    ),
+                  );
+                }
+              }
+            },
+            child: const Text('Battery settings'),
           ),
           const SizedBox(height: 6),
           Center(
             child: SizedBox(
               width: 220,
               child: OutlinedButton(
-                onPressed: _retrying || DateTime.now().millisecondsSinceEpoch < _retryCooldownUntil
+                onPressed:
+                    _retrying ||
+                        DateTime.now().millisecondsSinceEpoch <
+                            _retryCooldownUntil
                     ? null
                     : () async {
                         setState(() => _retrying = true);
@@ -188,11 +285,20 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildQueueStats(AppController controller) {
-    final int pending = controller.history.where((QueuedSms x) => x.status == 'pending' || x.status == 'retry_scheduled').length;
-    final int sent = controller.history.where((QueuedSms x) => x.status == 'delivered').length;
+    final int pending = controller.history
+        .where(
+          (QueuedSms x) =>
+              x.status == 'pending' || x.status == 'retry_scheduled',
+        )
+        .length;
+    final int sent = controller.history
+        .where((QueuedSms x) => x.status == 'delivered')
+        .length;
     final int failed = controller.history
-      .where((QueuedSms x) => x.status == 'failed' || x.status == 'dead_letter')
-      .length;
+        .where(
+          (QueuedSms x) => x.status == 'failed' || x.status == 'dead_letter',
+        )
+        .length;
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -247,57 +353,107 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       child: Column(
         children: history.take(20).map((QueuedSms item) {
-          final bool isFailed = item.status == 'failed' || item.status == 'dead_letter';
-          final bool isPending = item.status == 'pending' || item.status == 'retry_scheduled';
+          final bool isFailed =
+              item.status == 'failed' || item.status == 'dead_letter';
+          final bool isPending =
+              item.status == 'pending' || item.status == 'retry_scheduled';
           final bool isRetrying = _retryingItems.contains(item.id);
-          return ListTile(
-            dense: true,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(6),
-            ),
-            title: Text('Tk ${item.amount.toStringAsFixed(2)} - ${item.reference}'),
-            subtitle: Text(
-              '${item.sender} | TrxID ${item.transactionId}\n${item.transactionLocalTime}',
-            ),
-            isThreeLine: true,
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: <Widget>[
-                Chip(
-                  label: Text(item.status),
-                  backgroundColor: const Color(0xFFEAF6FF),
-                  side: BorderSide.none,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(6),
+          return Material(
+            type: MaterialType.transparency,
+            child: ListTile(
+              dense: true,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(6),
+              ),
+              title: Text(
+                'Tk ${item.amount.toStringAsFixed(2)} - ${item.reference}',
+              ),
+              subtitle: Text(
+                '${item.sender} | TrxID ${item.transactionId}\n${item.transactionLocalTime}',
+              ),
+              isThreeLine: true,
+              onLongPress: !isFailed
+                  ? null
+                  : () async {
+                      final bool confirmed =
+                          await showDialog<bool>(
+                            context: context,
+                            builder: (context) => AlertDialog(
+                              title: const Text('Handled manually?'),
+                              content: const Text(
+                                'Confirm you reviewed this transaction in the wallet and resolved it in the store. This stops delivery retries for this receipt.',
+                              ),
+                              actions: [
+                                TextButton(
+                                  onPressed: () =>
+                                      Navigator.pop(context, false),
+                                  child: const Text('Cancel'),
+                                ),
+                                TextButton(
+                                  onPressed: () => Navigator.pop(context, true),
+                                  child: const Text('Mark handled'),
+                                ),
+                              ],
+                            ),
+                          ) ??
+                          false;
+                      if (confirmed) {
+                        try {
+                          await widget.controller.markHandled(item);
+                        } catch (_) {
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  'Could not mark the receipt handled.',
+                                ),
+                              ),
+                            );
+                          }
+                        }
+                      }
+                    },
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  Chip(
+                    label: Text(item.status),
+                    backgroundColor: const Color(0xFFEAF6FF),
+                    side: BorderSide.none,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(6),
+                    ),
                   ),
-                ),
-                if (isFailed || isPending) ...<Widget>[
-                  const SizedBox(width: 8),
-                  OutlinedButton(
-                    onPressed: isRetrying
-                        ? null
-                        : () async {
-                            setState(() => _retryingItems.add(item.id));
-                            try {
-                              await widget.controller.retrySingle(item);
-                            } catch (_) {
-                              // controller.retrySingle is guarded
-                            } finally {
-                              if (mounted) {
-                                setState(() => _retryingItems.remove(item.id));
+                  if (isFailed || isPending) ...<Widget>[
+                    const SizedBox(width: 8),
+                    OutlinedButton(
+                      onPressed: isRetrying
+                          ? null
+                          : () async {
+                              setState(() => _retryingItems.add(item.id));
+                              try {
+                                await widget.controller.retrySingle(item);
+                              } catch (_) {
+                                // controller.retrySingle is guarded
+                              } finally {
+                                if (mounted) {
+                                  setState(
+                                    () => _retryingItems.remove(item.id),
+                                  );
+                                }
                               }
-                            }
-                          },
-                    child: isRetrying
-                        ? const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Text('Send'),
-                  ),
+                            },
+                      child: isRetrying
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Text('Send'),
+                    ),
+                  ],
                 ],
-              ],
+              ),
             ),
           );
         }).toList(),

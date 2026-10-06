@@ -32,6 +32,10 @@ migrate_working_dir/
 .pub/
 /build/
 /coverage/
+.env*
+!.env.example
+*.jks
+*.keystore
 
 # Symbolication related
 app.*.symbols

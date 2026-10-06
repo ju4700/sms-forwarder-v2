@@ -3,8 +3,6 @@ import 'package:flutter/material.dart';
 import '../core/app_controller.dart';
 import 'home_screen.dart';
 import 'logs_screen.dart';
-import 'messages/messages_screen.dart';
-import 'portal_screen.dart';
 import 'policy_screen.dart';
 
 class AppShell extends StatefulWidget {
@@ -21,9 +19,7 @@ class _AppShellState extends State<AppShell> {
 
   static const List<String> _titles = <String>[
     'SMS Forwarder',
-    'Messages',
     'Logs',
-    'Portal',
     'Policy',
   ];
 
@@ -33,17 +29,12 @@ class _AppShellState extends State<AppShell> {
       animation: widget.controller,
       builder: (BuildContext context, Widget? child) {
         return Scaffold(
-          appBar: AppBar(
-            title: Text(_titles[_index]),
-            centerTitle: false,
-          ),
+          appBar: AppBar(title: Text(_titles[_index]), centerTitle: false),
           body: IndexedStack(
             index: _index,
             children: <Widget>[
               HomeScreen(controller: widget.controller),
-              MessagesScreen(controller: widget.controller),
               LogsScreen(controller: widget.controller),
-              PortalScreen(controller: widget.controller),
               const PolicyScreen(),
             ],
           ),
@@ -61,19 +52,9 @@ class _AppShellState extends State<AppShell> {
                 label: 'Home',
               ),
               NavigationDestination(
-                icon: Icon(Icons.forum_outlined),
-                selectedIcon: Icon(Icons.forum),
-                label: 'Messages',
-              ),
-              NavigationDestination(
                 icon: Icon(Icons.receipt_long_outlined),
                 selectedIcon: Icon(Icons.receipt_long),
                 label: 'Logs',
-              ),
-              NavigationDestination(
-                icon: Icon(Icons.qr_code_2_outlined),
-                selectedIcon: Icon(Icons.qr_code_2),
-                label: 'Portal',
               ),
               NavigationDestination(
                 icon: Icon(Icons.policy_outlined),

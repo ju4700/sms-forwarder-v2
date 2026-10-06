@@ -9,15 +9,15 @@ void main() {
     final AppController controller = AppController();
 
     await tester.pumpWidget(
-      MaterialApp(
-        home: AppShell(controller: controller),
-      ),
+      MaterialApp(home: AppShell(controller: controller)),
     );
 
     expect(find.text('Home'), findsOneWidget);
     expect(find.text('Logs'), findsOneWidget);
     expect(find.text('Policy'), findsOneWidget);
     expect(find.text('SMS Forwarder'), findsOneWidget);
+    expect(find.text('Portal'), findsNothing);
+    expect(find.text('Messages'), findsNothing);
 
     await tester.tap(find.text('Logs'));
     await tester.pumpAndSettle();
@@ -29,7 +29,10 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Policy'), findsWidgets);
-    expect(find.textContaining('monitors incoming transaction SMS'), findsOneWidget);
+    expect(
+      find.textContaining('monitors incoming transaction SMS'),
+      findsOneWidget,
+    );
 
     controller.dispose();
     await tester.pumpWidget(const SizedBox.shrink());

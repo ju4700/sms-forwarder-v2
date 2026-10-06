@@ -7,6 +7,8 @@ plugins {
 
 dependencies {
     implementation("androidx.work:work-runtime-ktx:2.9.1")
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20250107")
 }
 
 android {
@@ -25,21 +27,38 @@ android {
 
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.example.sms_forwarder_v2"
+        applicationId = "com.qabasic.smsforwarder"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        minSdk = maxOf(23, flutter.minSdkVersion)
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }
 
+    testOptions { unitTests.isIncludeAndroidResources = true }
+
+    signingConfigs {
+        create("paymentRelease") {
+            val path = System.getenv("ANDROID_KEYSTORE_PATH")
+            if (!path.isNullOrBlank()) storeFile = file(path)
+            storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+            keyAlias = System.getenv("ANDROID_KEY_ALIAS")
+            keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("paymentRelease")
         }
+    }
+}
+
+gradle.taskGraph.whenReady {
+    if (allTasks.any { it.name in setOf("assembleRelease", "bundleRelease", "packageRelease", "validateSigningRelease") }) {
+        require(listOf("ANDROID_KEYSTORE_PATH", "ANDROID_KEYSTORE_PASSWORD", "ANDROID_KEY_ALIAS", "ANDROID_KEY_PASSWORD")
+            .all { !System.getenv(it).isNullOrBlank() }) { "Release signing requires ANDROID_KEYSTORE_PATH, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS and ANDROID_KEY_PASSWORD" }
     }
 }
 

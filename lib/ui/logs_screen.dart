@@ -33,18 +33,23 @@ class LogsScreen extends StatelessWidget {
                 )
               : Column(
                   children: items.take(40).map((QueuedSms item) {
-                    return ListTile(
-                      title: Text('${item.reference} · Tk ${item.amount.toStringAsFixed(2)}'),
-                      subtitle: Text(
-                        '${item.sender}\n${item.transactionLocalTime}\n${item.lastEvent ?? item.status}',
-                      ),
-                      isThreeLine: true,
-                      trailing: Chip(
-                        label: Text(item.status),
-                        backgroundColor: const Color(0xFFEAF6FF),
-                        side: BorderSide.none,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(6),
+                    return Material(
+                      type: MaterialType.transparency,
+                      child: ListTile(
+                        title: Text(
+                          '${item.reference} · Tk ${item.amount.toStringAsFixed(2)}',
+                        ),
+                        subtitle: Text(
+                          '${item.sender}\n${item.transactionLocalTime}\n${item.lastEvent ?? item.status}',
+                        ),
+                        isThreeLine: true,
+                        trailing: Chip(
+                          label: Text(item.status),
+                          backgroundColor: const Color(0xFFEAF6FF),
+                          side: BorderSide.none,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(6),
+                          ),
                         ),
                       ),
                     );
@@ -57,11 +62,18 @@ class LogsScreen extends StatelessWidget {
 
   Widget _summaryRow(List<QueuedSms> items) {
     final int captured = items.length;
-    final int sent = items.where((QueuedSms item) => item.status == 'delivered').length;
-    final int retrying = items.where((QueuedSms item) => item.status == 'retry_scheduled').length;
+    final int sent = items
+        .where((QueuedSms item) => item.status == 'delivered')
+        .length;
+    final int retrying = items
+        .where((QueuedSms item) => item.status == 'retry_scheduled')
+        .length;
     final int dead = items
-      .where((QueuedSms item) => item.status == 'failed' || item.status == 'dead_letter')
-      .length;
+        .where(
+          (QueuedSms item) =>
+              item.status == 'failed' || item.status == 'dead_letter',
+        )
+        .length;
 
     return Container(
       padding: const EdgeInsets.all(16),

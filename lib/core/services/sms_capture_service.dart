@@ -1,66 +1,27 @@
-import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'settings_service.dart';
 
 class SmsCaptureService {
-  SmsCaptureService();
-
-  static const MethodChannel _channel = MethodChannel('sms_forwarder_v2/sms_bridge');
-
   Future<bool> requestPermissions() async {
-    final PermissionStatus smsStatus = await Permission.sms.request();
-    return smsStatus.isGranted;
-  }
-
-  Future<void> startListening() async {}
-
-  Future<bool> isDefaultSmsApp() async {
-    try {
-      return await _channel.invokeMethod<bool>('isDefaultSmsApp') ?? false;
-    } catch (e) {
-      // ignore: avoid_print
-      print('sms_capture_service: isDefaultSmsApp failed: $e');
-      return false;
-    }
-  }
-
-  Future<bool> requestDefaultSmsRole() async {
-    try {
-      return await _channel.invokeMethod<bool>('requestDefaultSmsRole') ?? false;
-    } catch (e) {
-      // ignore: avoid_print
-      print('sms_capture_service: requestDefaultSmsRole failed: $e');
-      return false;
-    }
+    final bool granted = (await Permission.sms.request()).isGranted;
+    await Permission.notification.request();
+    return granted;
   }
 
   Future<List<Map<String, dynamic>>> fetchQueueSnapshot() async {
-    try {
-      final List<dynamic> rows =
-          await _channel.invokeMethod<List<dynamic>>('getQueueSnapshot') ?? <dynamic>[];
-
-      return rows.whereType<Map<dynamic, dynamic>>().map((Map<dynamic, dynamic> row) {
-        return row.map((dynamic key, dynamic value) {
-          return MapEntry(key.toString(), value);
-        });
-      }).toList(growable: false);
-    } catch (e) {
-      // If platform channel fails, return empty snapshot rather than throwing
-      // and log the error to console for diagnostics.
-      // Caller should handle empty list gracefully.
-      // ignore: avoid_print
-      print('sms_capture_service: fetchQueueSnapshot failed: $e');
-      return <Map<String, dynamic>>[];
-    }
+    final List<dynamic> rows =
+        await SettingsService.channel.invokeMethod<List<dynamic>>(
+          'getQueueSnapshot',
+        ) ??
+        [];
+    return rows
+        .whereType<Map>()
+        .map((row) => Map<String, dynamic>.from(row))
+        .toList();
   }
 
   Future<void> retryDeadLetters() async {
-    try {
-      await _channel.invokeMethod<int>('retryDeadLetters');
-    } catch (e) {
-      // ignore errors from native layer
-      // ignore: avoid_print
-      print('sms_capture_service: retryDeadLetters failed: $e');
-    }
+    await SettingsService.channel.invokeMethod<int>('retryDeadLetters');
   }
 
   Future<bool> retrySingle({
@@ -68,94 +29,25 @@ class SmsCaptureService {
     required String body,
     required int timestamp,
   }) async {
-    try {
-      return await _channel.invokeMethod<bool>('retrySingle', <String, dynamic>{
-            'sender': sender,
-            'body': body,
-            'timestamp': timestamp,
-          }) ??
-          false;
-    } catch (e) {
-      // ignore: avoid_print
-      print('sms_capture_service: retrySingle failed: $e');
-      return false;
-    }
+    return await SettingsService.channel.invokeMethod<bool>('retrySingle', {
+          'body': body,
+          'timestamp': timestamp,
+        }) ??
+        false;
   }
 
   Future<void> triggerNativeSync() async {
-    try {
-      await _channel.invokeMethod<bool>('triggerNativeSync');
-    } catch (e) {
-      // ignore errors from native layer
-      // ignore: avoid_print
-      print('sms_capture_service: triggerNativeSync failed: $e');
-    }
+    await SettingsService.channel.invokeMethod<bool>('triggerNativeSync');
   }
 
-  Future<bool> sendSms({
-    required String address,
-    required String body,
-  }) async {
-    try {
-      return await _channel.invokeMethod<bool>('sendSms', <String, dynamic>{
-            'address': address,
-            'body': body,
-          }) ??
-          false;
-    } catch (e) {
-      // ignore: avoid_print
-      print('sms_capture_service: sendSms failed: $e');
-      return false;
-    }
-  }
-
-  Future<List<Map<String, dynamic>>> importSmsInbox({int limit = 500}) async {
-    try {
-      final List<dynamic> rows =
-          await _channel.invokeMethod<List<dynamic>>('importSmsInbox', <String, dynamic>{
-                'limit': limit,
-              }) ??
-              <dynamic>[];
-
-      return rows.whereType<Map<dynamic, dynamic>>().map((Map<dynamic, dynamic> row) {
-        return row.map((dynamic key, dynamic value) {
-          return MapEntry(key.toString(), value);
-        });
-      }).toList(growable: false);
-    } catch (e) {
-      // ignore: avoid_print
-      print('sms_capture_service: importSmsInbox failed: $e');
-      return <Map<String, dynamic>>[];
-    }
-  }
-
-  Future<void> setCaptureRules(String json) async {
-    try {
-      await _channel.invokeMethod<bool>('setCaptureRules', <String, dynamic>{
-        'json': json,
-      });
-    } catch (e) {
-      // ignore: avoid_print
-      print('sms_capture_service: setCaptureRules failed: $e');
-    }
-  }
-
-  Future<bool> isIgnoringBatteryOptimizations() async {
-    try {
-      return await _channel.invokeMethod<bool>('isIgnoringBatteryOptimizations') ?? false;
-    } catch (e) {
-      // ignore: avoid_print
-      print('sms_capture_service: battery status failed: $e');
-      return false;
-    }
+  Future<int> recoverReceipts() async {
+    return await SettingsService.channel.invokeMethod<int>('recoverReceipts') ??
+        0;
   }
 
   Future<void> requestIgnoreBatteryOptimizations() async {
-    try {
-      await _channel.invokeMethod<bool>('requestIgnoreBatteryOptimizations');
-    } catch (e) {
-      // ignore: avoid_print
-      print('sms_capture_service: request battery ignore failed: $e');
-    }
+    await SettingsService.channel.invokeMethod<bool>(
+      'requestIgnoreBatteryOptimizations',
+    );
   }
 }
