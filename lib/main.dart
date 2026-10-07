@@ -5,14 +5,14 @@ import 'ui/app_shell.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
+
   // Set up global error handlers to prevent crashes from crashing the entire app
   FlutterError.onError = (FlutterErrorDetails details) {
     // ignore: avoid_print
     print('Flutter error: ${details.exception}\n${details.stack}');
     // Continue running the app even if there's an error
   };
-  
+
   final AppController controller = AppController();
   await controller.initialize();
   runApp(SmsForwarderApp(controller: controller));
@@ -38,17 +38,27 @@ class SmsForwarderApp extends StatelessWidget {
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: <Widget>[
-                      const Icon(Icons.warning_rounded, size: 48, color: Colors.red),
+                      const Icon(
+                        Icons.warning_rounded,
+                        size: 48,
+                        color: Colors.red,
+                      ),
                       const SizedBox(height: 16),
                       const Text(
                         'UI Error',
-                        style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
                       const SizedBox(height: 8),
                       Text(
                         'Please restart the app.',
                         textAlign: TextAlign.center,
-                        style: const TextStyle(fontSize: 14, color: Colors.grey),
+                        style: const TextStyle(
+                          fontSize: 14,
+                          color: Colors.grey,
+                        ),
                       ),
                     ],
                   ),

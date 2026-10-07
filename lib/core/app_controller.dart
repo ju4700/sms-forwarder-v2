@@ -1,539 +1,180 @@
 import 'dart:async';
-
-import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart';
-
+import 'package:flutter/services.dart';
 import 'models/queued_sms.dart';
-import 'services/bkash_parser.dart';
 import 'services/foreground_service_controller.dart';
-import 'services/message_store.dart';
 import 'services/settings_service.dart';
 import 'services/sms_capture_service.dart';
 
 class AppController extends ChangeNotifier {
-  AppController()
-      : _smsCaptureService = SmsCaptureService(),
-        _messageStore = MessageStore();
-
-  final SmsCaptureService _smsCaptureService;
-  final MessageStore _messageStore;
-
-  AppSettings _settings = const AppSettings(
-    apiEndpoint: '',
-    foregroundReliabilityMode: false,
-    maxAttempts: 12,
-    portalDeviceId: '',
-    portalDeviceSecret: '',
-    portalPin: '',
-    portalPairedAt: 0,
-    portalLastInboxSyncAt: 0,
-  );
-  bool _ready = false;
+  final SmsCaptureService _sms = SmsCaptureService();
+  AppSettings _settings = const AppSettings();
+  List<QueuedSms> _history = [];
+  String _status = 'Configure the receiving wallet and server';
   bool _permissionsGranted = false;
-  bool _isDefaultSmsApp = false;
-  String _status = 'Starting...';
-  List<QueuedSms> _history = <QueuedSms>[];
-  StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
-  Timer? _nativeDrainTimer;
-  Timer? _inboxRefreshTimer;
-
+  bool _ready = false;
+  bool _refreshing = false;
+  bool _disposed = false;
+  Timer? _timer;
   AppSettings get settings => _settings;
-  bool get portalPaired => _settings.portalDeviceId.isNotEmpty;
-  String get portalDeviceId => _settings.portalDeviceId;
-  String get portalPin => _settings.portalPin;
-  bool get ready => _ready;
-  bool get permissionsGranted => _permissionsGranted;
-  bool get isDefaultSmsApp => _isDefaultSmsApp;
-  String get status => _status;
   List<QueuedSms> get history => _history;
-  MessageStore get messageStore => _messageStore;
+  String get status => _status;
+  bool get permissionsGranted => _permissionsGranted;
+  bool get ready => _ready;
 
   Future<void> initialize() async {
-    _status = 'Initializing services';
-    notifyListeners();
-
     try {
-      // Load settings with fallback to defaults if load fails
-      try {
-        _settings = await SettingsService.instance.load();
-      } catch (e) {
-        // ignore: avoid_print
-        print('app_controller: Failed to load settings, using defaults: $e');
-        _settings = const AppSettings(
-          apiEndpoint: '',
-          foregroundReliabilityMode: false,
-          maxAttempts: 12,
-          portalDeviceId: '',
-          portalDeviceSecret: '',
-          portalPin: '',
-          portalPairedAt: 0,
-          portalLastInboxSyncAt: 0,
-        );
+      _settings = await SettingsService.instance.load();
+      _permissionsGranted = await _sms.requestPermissions();
+      await refresh();
+      if (_permissionsGranted && _settings.secretConfigured) {
+        await _sms.triggerNativeSync();
       }
-
-      if (_settings.portalDeviceId.isNotEmpty && !_settings.foregroundReliabilityMode) {
-        _settings = _settings.copyWith(foregroundReliabilityMode: true);
-        await SettingsService.instance.save(_settings);
-      }
-
-      // Apply foreground mode with error handling
-      try {
-        await ForegroundServiceController.instance.apply(
-          _settings.foregroundReliabilityMode,
-        );
-      } catch (e) {
-        // ignore: avoid_print
-        print('app_controller: Failed to apply foreground mode: $e');
-      }
-
-      // Request permissions with timeout to prevent hanging
-      try {
-        _permissionsGranted = await Future.any(<Future<bool>>[
-          _smsCaptureService.requestPermissions(),
-          Future<bool>.delayed(const Duration(seconds: 10), () {
-            // ignore: avoid_print
-            print('app_controller: Permission request timeout');
-            return false;
-          }),
-        ]);
-      } catch (e) {
-        // ignore: avoid_print
-        print('app_controller: Failed to request permissions: $e');
-        _permissionsGranted = false;
-      }
-
-      // Check default SMS role status
-      try {
-        _isDefaultSmsApp = await _smsCaptureService.isDefaultSmsApp();
-      } catch (e) {
-        // ignore: avoid_print
-        print('app_controller: Failed to read default SMS role: $e');
-        _isDefaultSmsApp = false;
-      }
-
-      if (_permissionsGranted) {
-        // Start listening with error handling
-        try {
-          await _smsCaptureService.startListening();
-        } catch (e) {
-          // ignore: avoid_print
-          print('app_controller: Failed to start listening: $e');
-        }
-
-        // Initial sync
-        try {
-          await _smsCaptureService.triggerNativeSync();
-          await _refreshHistoryFromNative();
-        } catch (e) {
-          // ignore: avoid_print
-          print('app_controller: Initial sync failed: $e');
-        }
-
-        // Start periodic drain timer
-        _nativeDrainTimer = Timer.periodic(const Duration(seconds: 10), (Timer _) async {
-          try {
-            await _smsCaptureService.triggerNativeSync();
-            await _refreshHistoryFromNative();
-          } catch (e) {
-            // ignore: avoid_print
-            print('app_controller: Periodic sync failed: $e');
-          }
-        });
-
-        _status = 'Monitoring SMS';
-      } else {
-        _status = 'SMS permission denied';
-      }
-
-      // Import inbox once after permissions granted
-      if (_permissionsGranted) {
-        await _importInboxOnce();
-        await _syncRulesToNative();
-        _startInboxRefreshTimer();
-      }
-
-      // Refresh history with error handling
-      try {
-        await _refreshHistoryFromNative();
-      } catch (e) {
-        // ignore: avoid_print
-        print('app_controller: Failed to refresh history: $e');
-      }
-
-      // Start connectivity listening
-      _listenConnectivity();
-
-      _ready = true;
-      _status = 'Ready';
-    } catch (e) {
-      // Catch-all for any unexpected errors
-      // ignore: avoid_print
-      print('app_controller: Unexpected error during initialize: $e');
-      _status = 'Initialization failed - restart the app';
-      _ready = true; // Mark as ready anyway so UI doesn't hang
+      // Recovery is explicit: historical inbox messages are never imported automatically.
+      _timer = Timer.periodic(const Duration(seconds: 10), (_) {
+        unawaited(refresh());
+      });
+      _status = _permissionsGranted
+          ? (_settings.secretConfigured
+                ? 'Monitoring incoming bKash receipts'
+                : 'Configure the receiving wallet and server')
+          : 'SMS permission denied';
+    } catch (_) {
+      _status = 'Payment storage unavailable. Check permissions and restart.';
     }
-    notifyListeners();
+    _ready = true;
+    _notify();
   }
 
-  Future<void> requestDefaultSmsRole() async {
-    _status = 'Requesting default SMS role';
-    notifyListeners();
-
-    try {
-      await _smsCaptureService.requestDefaultSmsRole();
-      await Future<void>.delayed(const Duration(seconds: 2));
-      _isDefaultSmsApp = await _smsCaptureService.isDefaultSmsApp();
-      _status = _isDefaultSmsApp
-          ? 'Default SMS role enabled'
-          : 'Default SMS role not granted';
-    } catch (e) {
-      _status = 'Default SMS role request failed';
-      // ignore: avoid_print
-      print('app_controller: requestDefaultSmsRole failed: $e');
-    }
-
-    notifyListeners();
-  }
-
-  Future<void> saveEndpoint(String endpoint) async {
-    _settings = _settings.copyWith(apiEndpoint: endpoint.trim());
-    await SettingsService.instance.save(_settings);
-    await _smsCaptureService.triggerNativeSync();
-    await _refreshHistoryFromNative();
-    _status = 'API endpoint saved';
-    notifyListeners();
+  Future<void> saveDelivery({
+    required String endpoint,
+    required String deviceId,
+    required String receivingAccount,
+    required String secret,
+  }) async {
+    await SettingsService.instance.save(
+      endpoint: endpoint,
+      deviceId: deviceId,
+      receivingAccount: receivingAccount,
+      secret: secret,
+    );
+    _settings = await SettingsService.instance.load();
+    _status = 'Signed delivery configured';
+    _notify();
   }
 
   Future<void> setForegroundMode(bool value) async {
-    _settings = _settings.copyWith(foregroundReliabilityMode: value);
-    await SettingsService.instance.save(_settings);
-    await ForegroundServiceController.instance.apply(value);
-    _status = value
-        ? 'Foreground reliability mode enabled'
-        : 'Foreground reliability mode disabled';
-    notifyListeners();
+    try {
+      await SettingsService.instance.setForegroundMode(value);
+      await ForegroundServiceController.instance.apply(value);
+      _settings = await SettingsService.instance.load();
+      _status = value
+          ? 'Foreground monitoring enabled'
+          : 'Background SMS monitoring active';
+    } catch (_) {
+      _status = 'Could not change foreground monitoring';
+    }
+    _notify();
   }
 
-  Future<void> savePortalPairing({
-    required String deviceId,
-    required String deviceSecret,
-    required String pin,
-  }) async {
-    _settings = _settings.copyWith(
-      portalDeviceId: deviceId,
-      portalDeviceSecret: deviceSecret,
-      portalPin: pin,
-      portalPairedAt: DateTime.now().millisecondsSinceEpoch,
-    );
-    await SettingsService.instance.save(_settings);
-    await setForegroundMode(true);
-    await _smsCaptureService.triggerNativeSync();
-    notifyListeners();
+  Future<void> recoverReceipts() async {
+    try {
+      final int count = await _sms.recoverReceipts();
+      _status = 'Recovered $count new receipts from the last 48 hours';
+      await refresh();
+    } catch (e) {
+      _status = _message(e);
+    }
+    _notify();
   }
 
-  Future<void> clearPortalPairing() async {
-    _settings = _settings.copyWith(
-      portalDeviceId: '',
-      portalDeviceSecret: '',
-      portalPin: '',
-      portalPairedAt: 0,
-      portalLastInboxSyncAt: 0,
-    );
-    await SettingsService.instance.save(_settings);
-    await _smsCaptureService.triggerNativeSync();
-    notifyListeners();
-  }
-
-  Future<void> savePortalInboxSyncAt(int timestamp) async {
-    _settings = _settings.copyWith(
-      portalLastInboxSyncAt: timestamp,
-    );
-    await SettingsService.instance.save(_settings);
-    notifyListeners();
+  Future<void> disableBatteryOptimization() async {
+    await _sms.requestIgnoreBatteryOptimizations();
   }
 
   Future<void> retryFailed() async {
-    _status = 'Retrying queued messages';
-    notifyListeners();
     try {
-      await _syncRulesToNative();
-      await _smsCaptureService.retryDeadLetters();
-      await _smsCaptureService.triggerNativeSync();
-      await _refreshHistoryFromNative();
-      _status = 'Retry completed';
+      await _sms.retryDeadLetters();
+      await refresh();
+      _status = 'Retry requested';
     } catch (e) {
-      _status = 'Retry failed: ${e.toString()}';
+      _status = _message(e);
     }
-    notifyListeners();
+    _notify();
+  }
+
+  Future<void> markHandled(QueuedSms item) async {
+    await SettingsService.channel.invokeMethod<bool>('markHandled', {
+      'id': item.id,
+    });
+    await refresh();
   }
 
   Future<void> retrySingle(QueuedSms item) async {
-    _status = 'Retrying message';
-    notifyListeners();
     try {
-      await _syncRulesToNative();
-      await _smsCaptureService.retrySingle(
+      await _sms.retrySingle(
         sender: item.sender,
         body: item.messageBody,
         timestamp: item.createdAt,
       );
-      await _smsCaptureService.triggerNativeSync();
-      await _refreshHistoryFromNative();
-      _status = 'Retry triggered';
+      await refresh();
     } catch (e) {
-      _status = 'Retry failed: ${e.toString()}';
+      _status = _message(e);
     }
-    notifyListeners();
+    _notify();
   }
 
-  Future<void> _refreshHistoryFromNative() async {
+  Future<void> refresh() async {
+    if (_refreshing || _disposed) return;
+    _refreshing = true;
     try {
-      final List<Map<String, dynamic>> snapshot = await _smsCaptureService.fetchQueueSnapshot();
-      await _persistSnapshotToMessageStore(snapshot);
-      final List<Map<String, dynamic>> forwardRows = snapshot
-          .where((Map<String, dynamic> row) => row['forward'] == true)
-          .toList(growable: false);
-      _history = forwardRows
-          .map(_mapNativeRowToQueuedSms)
-          .toList(growable: false)
-        ..sort((QueuedSms a, QueuedSms b) => b.createdAt.compareTo(a.createdAt));
-      notifyListeners();
-    } catch (e) {
-      // ignore: avoid_print
-      print('app_controller: refreshHistory failed: $e');
-    }
-  }
-
-  Future<void> _persistSnapshotToMessageStore(List<Map<String, dynamic>> snapshot) async {
-    if (snapshot.isEmpty) {
-      return;
-    }
-
-    await _messageStore.transaction(() async {
-      for (final Map<String, dynamic> row in snapshot) {
-        final String sender = (row['sender'] as String? ?? '').trim();
-        final String body = (row['body'] as String? ?? '').trim();
-        final int timestamp = _asEpochMs(row['timestamp']);
-        final String status = (row['status'] as String? ?? 'pending').trim();
-
-        if (sender.isEmpty || body.isEmpty) {
-          continue;
-        }
-
-        await _messageStore.insertIncomingIfMissing(
-          address: sender,
-          body: body,
-          timestamp: timestamp,
-          status: status,
+      _history = (await _sms.fetchQueueSnapshot()).map((row) {
+        final int createdAt = (row['timestamp'] as num).toInt();
+        final DateTime paidAt = DateTime.fromMillisecondsSinceEpoch(
+          (row['paidAt'] as num).toInt(),
+          isUtc: true,
         );
-      }
-    });
-  }
-
-  Future<void> _importInboxOnce() async {
-    try {
-      final bool imported = await SettingsService.instance.hasImportedInbox();
-      if (imported) {
-        return;
-      }
-
-      final List<Map<String, dynamic>> rows = await _smsCaptureService.importSmsInbox(limit: 500);
-      if (rows.isEmpty) {
-        await SettingsService.instance.markInboxImported();
-        return;
-      }
-
-      await _messageStore.transaction(() async {
-        for (final Map<String, dynamic> row in rows) {
-          final String sender = (row['address'] as String? ?? '').trim();
-          final String body = (row['body'] as String? ?? '').trim();
-          final int timestamp = _asEpochMs(row['timestamp']);
-          final bool incoming = (row['isIncoming'] as bool?) ?? true;
-
-          if (sender.isEmpty || body.isEmpty) {
-            continue;
-          }
-
-          if (incoming) {
-            await _messageStore.insertIncomingIfMissing(
-              address: sender,
-              body: body,
-              timestamp: timestamp,
-              status: 'received',
-            );
-          } else {
-            await _messageStore.insertOutgoingMessage(
-              address: sender,
-              body: body,
-              timestamp: timestamp,
-              status: 'sent',
-            );
-          }
-        }
-      });
-
-      await SettingsService.instance.markInboxImported();
-    } catch (e) {
-      // ignore: avoid_print
-      print('app_controller: import inbox failed: $e');
+        return QueuedSms(
+          id: row['id'] as String,
+          sender: row['payerAccount'] as String,
+          messageBody: row['body'] as String,
+          amount: (row['amountMinor'] as num).toInt() / 100,
+          transactionId: row['transactionId'] as String,
+          reference: row['reference'] as String,
+          transactionLocalTime: paidAt
+              .add(const Duration(hours: 6))
+              .toIso8601String()
+              .replaceFirst('Z', '+06:00'),
+          transactionUtcTime: paidAt.toIso8601String(),
+          fee: 0,
+          balance: 0,
+          status: row['status'] as String,
+          attemptCount: (row['attemptCount'] as num).toInt(),
+          createdAt: createdAt,
+          updatedAt: createdAt,
+          nextRetryAt: (row['nextRetryAt'] as num?)?.toInt(),
+          lastEvent: row['lastEvent'] as String?,
+        );
+      }).toList()..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    } catch (_) {
+      _status = 'Could not read encrypted payment queue';
+    } finally {
+      _refreshing = false;
     }
+    _notify();
   }
 
-  void _startInboxRefreshTimer() {
-    _inboxRefreshTimer?.cancel();
-    _inboxRefreshTimer = Timer.periodic(const Duration(seconds: 45), (Timer _) async {
-      await _refreshInbox();
-    });
-  }
-
-  Future<void> _refreshInbox() async {
-    try {
-      if (!_permissionsGranted) {
-        return;
-      }
-
-      final List<Map<String, dynamic>> rows = await _smsCaptureService.importSmsInbox(limit: 200);
-      if (rows.isEmpty) {
-        return;
-      }
-
-      await _messageStore.transaction(() async {
-        for (final Map<String, dynamic> row in rows) {
-          final String sender = (row['address'] as String? ?? '').trim();
-          final String body = (row['body'] as String? ?? '').trim();
-          final int timestamp = _asEpochMs(row['timestamp']);
-          final bool incoming = (row['isIncoming'] as bool?) ?? true;
-
-          if (sender.isEmpty || body.isEmpty) {
-            continue;
-          }
-
-          if (incoming) {
-            await _messageStore.insertIncomingIfMissing(
-              address: sender,
-              body: body,
-              timestamp: timestamp,
-              status: 'received',
-            );
-          } else {
-            await _messageStore.insertOutgoingMessage(
-              address: sender,
-              body: body,
-              timestamp: timestamp,
-              status: 'sent',
-            );
-          }
-        }
-      });
-    } catch (e) {
-      // ignore: avoid_print
-      print('app_controller: refresh inbox failed: $e');
-    }
-  }
-
-  Future<void> _syncRulesToNative() async {
-    try {
-      final String json = await _messageStore.exportRulesJson();
-      await _smsCaptureService.setCaptureRules(json);
-    } catch (e) {
-      // ignore: avoid_print
-      print('app_controller: sync rules failed: $e');
-    }
-  }
-
-  Future<void> refreshRulesSync() async {
-    await _syncRulesToNative();
-  }
-
-
-  QueuedSms _mapNativeRowToQueuedSms(Map<String, dynamic> row) {
-    final String body = (row['body'] as String? ?? '').trim();
-    final ParsedBkashTransaction? parsed = BkashParser.parse(
-      body,
-      fallbackSender: row['sender'] as String?,
-    );
-    final int createdAt = _asEpochMs(row['timestamp']);
-    final int nextRetryAt = _asEpochMs(row['nextRetryAt']);
-    final int attemptCount = _asInt(row['attemptCount']);
-    final String sender = parsed?.sender ?? (row['sender'] as String? ?? '');
-    final String status = (row['status'] as String? ?? 'pending').trim();
-    final String lastEvent = (row['lastEvent'] as String? ?? '').trim();
-    final String lastError = (row['lastError'] as String? ?? '').trim();
-
-    final DateTime fallbackLocal = DateTime.fromMillisecondsSinceEpoch(createdAt);
-    return QueuedSms(
-      id: _buildNativeRowId(row),
-      sender: sender,
-      messageBody: body,
-      amount: parsed?.amount ?? 0,
-      transactionId: parsed?.transactionId ?? 'UNKNOWN',
-      reference: parsed?.reference ?? 'UNKNOWN',
-      transactionLocalTime: parsed?.localIso ?? fallbackLocal.toIso8601String(),
-      transactionUtcTime: parsed?.utcIso ?? fallbackLocal.toUtc().toIso8601String(),
-      fee: parsed?.fee ?? 0,
-      balance: parsed?.balance ?? 0,
-      status: status,
-      attemptCount: attemptCount,
-      nextRetryAt: nextRetryAt == 0 ? null : nextRetryAt,
-      lastError: (row['lastError'] as String?)?.trim().isEmpty == true
-          ? null
-          : (row['lastError'] as String?),
-      lastEvent: lastEvent.isEmpty
-          ? (lastError.isEmpty ? null : lastError)
-          : lastEvent,
-      createdAt: createdAt,
-      updatedAt: createdAt,
-    );
-  }
-
-  int _asEpochMs(dynamic value) {
-    if (value is int) {
-      return value;
-    }
-    if (value is num) {
-      return value.toInt();
-    }
-    return DateTime.now().millisecondsSinceEpoch;
-  }
-
-  int _asInt(dynamic value) {
-    if (value is int) {
-      return value;
-    }
-    if (value is num) {
-      return value.toInt();
-    }
-    return 0;
-  }
-
-  String _buildNativeRowId(Map<String, dynamic> row) {
-    final String sender = row['sender'] as String? ?? '';
-    final String body = row['body'] as String? ?? '';
-    final int timestamp = _asEpochMs(row['timestamp']);
-    final String seed = '$sender|$body|$timestamp';
-    return 'native-${seed.hashCode.abs()}';
-  }
-
-  void _listenConnectivity() {
-    _connectivitySub?.cancel();
-    _connectivitySub = Connectivity().onConnectivityChanged.listen((
-      List<ConnectivityResult> result,
-    ) async {
-      if (result.any((ConnectivityResult item) => item != ConnectivityResult.none)) {
-        await _smsCaptureService.triggerNativeSync();
-        await _refreshHistoryFromNative();
-        _status = 'Internet available: queue sync triggered';
-        notifyListeners();
-      }
-    });
+  String _message(Object e) => e is PlatformException
+      ? e.message ?? 'Payment operation failed'
+      : 'Payment operation failed';
+  void _notify() {
+    if (!_disposed) notifyListeners();
   }
 
   @override
   void dispose() {
-    _nativeDrainTimer?.cancel();
-    _connectivitySub?.cancel();
-    _inboxRefreshTimer?.cancel();
-    _messageStore.close();
+    _disposed = true;
+    _timer?.cancel();
     super.dispose();
   }
 }

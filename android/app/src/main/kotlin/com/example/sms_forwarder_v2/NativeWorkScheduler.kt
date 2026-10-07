@@ -27,7 +27,7 @@ object NativeWorkScheduler {
 
         WorkManager.getInstance(context).enqueueUniqueWork(
             immediateWorkName,
-            ExistingWorkPolicy.REPLACE,
+            ExistingWorkPolicy.KEEP,
             request,
         )
     }
