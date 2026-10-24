@@ -4,13 +4,13 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
-import android.content.pm.ServiceInfo
+import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
-import android.content.Context
 
 class SmsMonitorService : Service() {
     private var wakeLock: android.os.PowerManager.WakeLock? = null
@@ -27,7 +27,8 @@ class SmsMonitorService : Service() {
             android.os.PowerManager.PARTIAL_WAKE_LOCK,
             "SmsForwarder::MonitorWakeLock"
         )
-        wakeLock?.acquire()
+        // Use a bounded safety timeout (10 minutes) so device is not held awake indefinitely
+        wakeLock?.acquire(10 * 60 * 1000L)
         
         createNotificationChannel()
         try {
@@ -62,11 +63,17 @@ class SmsMonitorService : Service() {
             return
         }
 
-        val restartIntent = Intent(applicationContext, SmsMonitorService::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(restartIntent)
-        } else {
-            startService(restartIntent)
+        try {
+            val restartIntent = Intent(applicationContext, SmsMonitorService::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(restartIntent)
+            } else {
+                startService(restartIntent)
+            }
+        } catch (e: Exception) {
+            Log.w("SmsMonitorService", "Could not restart foreground service from onTaskRemoved (API 31+ background restriction): ${e.message}")
+            // Fall back to WorkManager periodic scheduling to remain alive safely without crash
+            NativeWorkScheduler.ensurePeriodic(applicationContext)
         }
     }
 

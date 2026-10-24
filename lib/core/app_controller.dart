@@ -20,13 +20,9 @@ class AppController extends ChangeNotifier {
 
   AppSettings _settings = const AppSettings(
     apiEndpoint: '',
+    apiSecret: '',
     foregroundReliabilityMode: false,
     maxAttempts: 12,
-    portalDeviceId: '',
-    portalDeviceSecret: '',
-    portalPin: '',
-    portalPairedAt: 0,
-    portalLastInboxSyncAt: 0,
   );
   bool _ready = false;
   bool _permissionsGranted = false;
@@ -38,15 +34,13 @@ class AppController extends ChangeNotifier {
   Timer? _inboxRefreshTimer;
 
   AppSettings get settings => _settings;
-  bool get portalPaired => _settings.portalDeviceId.isNotEmpty;
-  String get portalDeviceId => _settings.portalDeviceId;
-  String get portalPin => _settings.portalPin;
   bool get ready => _ready;
   bool get permissionsGranted => _permissionsGranted;
   bool get isDefaultSmsApp => _isDefaultSmsApp;
   String get status => _status;
   List<QueuedSms> get history => _history;
   MessageStore get messageStore => _messageStore;
+  SmsCaptureService get smsCaptureService => _smsCaptureService;
 
   Future<void> initialize() async {
     _status = 'Initializing services';
@@ -57,23 +51,12 @@ class AppController extends ChangeNotifier {
       try {
         _settings = await SettingsService.instance.load();
       } catch (e) {
-        // ignore: avoid_print
-        print('app_controller: Failed to load settings, using defaults: $e');
         _settings = const AppSettings(
           apiEndpoint: '',
+          apiSecret: '',
           foregroundReliabilityMode: false,
           maxAttempts: 12,
-          portalDeviceId: '',
-          portalDeviceSecret: '',
-          portalPin: '',
-          portalPairedAt: 0,
-          portalLastInboxSyncAt: 0,
         );
-      }
-
-      if (_settings.portalDeviceId.isNotEmpty && !_settings.foregroundReliabilityMode) {
-        _settings = _settings.copyWith(foregroundReliabilityMode: true);
-        await SettingsService.instance.save(_settings);
       }
 
       // Apply foreground mode with error handling
@@ -81,63 +64,42 @@ class AppController extends ChangeNotifier {
         await ForegroundServiceController.instance.apply(
           _settings.foregroundReliabilityMode,
         );
-      } catch (e) {
-        // ignore: avoid_print
-        print('app_controller: Failed to apply foreground mode: $e');
-      }
+      } catch (_) {}
 
       // Request permissions with timeout to prevent hanging
       try {
         _permissionsGranted = await Future.any(<Future<bool>>[
           _smsCaptureService.requestPermissions(),
-          Future<bool>.delayed(const Duration(seconds: 10), () {
-            // ignore: avoid_print
-            print('app_controller: Permission request timeout');
-            return false;
-          }),
+          Future<bool>.delayed(const Duration(seconds: 10), () => false),
         ]);
-      } catch (e) {
-        // ignore: avoid_print
-        print('app_controller: Failed to request permissions: $e');
+      } catch (_) {
         _permissionsGranted = false;
       }
 
       // Check default SMS role status
       try {
         _isDefaultSmsApp = await _smsCaptureService.isDefaultSmsApp();
-      } catch (e) {
-        // ignore: avoid_print
-        print('app_controller: Failed to read default SMS role: $e');
+      } catch (_) {
         _isDefaultSmsApp = false;
       }
 
       if (_permissionsGranted) {
-        // Start listening with error handling
         try {
           await _smsCaptureService.startListening();
-        } catch (e) {
-          // ignore: avoid_print
-          print('app_controller: Failed to start listening: $e');
-        }
+        } catch (_) {}
 
         // Initial sync
         try {
           await _smsCaptureService.triggerNativeSync();
           await _refreshHistoryFromNative();
-        } catch (e) {
-          // ignore: avoid_print
-          print('app_controller: Initial sync failed: $e');
-        }
+        } catch (_) {}
 
         // Start periodic drain timer
-        _nativeDrainTimer = Timer.periodic(const Duration(seconds: 10), (Timer _) async {
+        _nativeDrainTimer = Timer.periodic(const Duration(seconds: 15), (Timer _) async {
           try {
             await _smsCaptureService.triggerNativeSync();
             await _refreshHistoryFromNative();
-          } catch (e) {
-            // ignore: avoid_print
-            print('app_controller: Periodic sync failed: $e');
-          }
+          } catch (_) {}
         });
 
         _status = 'Monitoring SMS';
@@ -148,6 +110,7 @@ class AppController extends ChangeNotifier {
       // Import inbox once after permissions granted
       if (_permissionsGranted) {
         await _importInboxOnce();
+        await _messageStore.ensureDefaultRules();
         await _syncRulesToNative();
         _startInboxRefreshTimer();
       }
@@ -155,22 +118,16 @@ class AppController extends ChangeNotifier {
       // Refresh history with error handling
       try {
         await _refreshHistoryFromNative();
-      } catch (e) {
-        // ignore: avoid_print
-        print('app_controller: Failed to refresh history: $e');
-      }
+      } catch (_) {}
 
       // Start connectivity listening
       _listenConnectivity();
 
       _ready = true;
       _status = 'Ready';
-    } catch (e) {
-      // Catch-all for any unexpected errors
-      // ignore: avoid_print
-      print('app_controller: Unexpected error during initialize: $e');
-      _status = 'Initialization failed - restart the app';
-      _ready = true; // Mark as ready anyway so UI doesn't hang
+    } catch (_) {
+      _status = 'Initialization failed';
+      _ready = true;
     }
     notifyListeners();
   }
@@ -186,22 +143,30 @@ class AppController extends ChangeNotifier {
       _status = _isDefaultSmsApp
           ? 'Default SMS role enabled'
           : 'Default SMS role not granted';
-    } catch (e) {
+    } catch (_) {
       _status = 'Default SMS role request failed';
-      // ignore: avoid_print
-      print('app_controller: requestDefaultSmsRole failed: $e');
     }
 
     notifyListeners();
   }
 
-  Future<void> saveEndpoint(String endpoint) async {
-    _settings = _settings.copyWith(apiEndpoint: endpoint.trim());
+  Future<void> saveSettings({required String endpoint, String secret = ''}) async {
+    _settings = _settings.copyWith(
+      apiEndpoint: endpoint.trim(),
+      apiSecret: secret.trim(),
+    );
     await SettingsService.instance.save(_settings);
     await _smsCaptureService.triggerNativeSync();
     await _refreshHistoryFromNative();
-    _status = 'API endpoint saved';
+    _status = 'Settings saved';
     notifyListeners();
+  }
+
+  Future<void> saveEndpoint(String endpoint, {String? secret}) async {
+    await saveSettings(
+      endpoint: endpoint,
+      secret: secret ?? _settings.apiSecret,
+    );
   }
 
   Future<void> setForegroundMode(bool value) async {
@@ -211,44 +176,6 @@ class AppController extends ChangeNotifier {
     _status = value
         ? 'Foreground reliability mode enabled'
         : 'Foreground reliability mode disabled';
-    notifyListeners();
-  }
-
-  Future<void> savePortalPairing({
-    required String deviceId,
-    required String deviceSecret,
-    required String pin,
-  }) async {
-    _settings = _settings.copyWith(
-      portalDeviceId: deviceId,
-      portalDeviceSecret: deviceSecret,
-      portalPin: pin,
-      portalPairedAt: DateTime.now().millisecondsSinceEpoch,
-    );
-    await SettingsService.instance.save(_settings);
-    await setForegroundMode(true);
-    await _smsCaptureService.triggerNativeSync();
-    notifyListeners();
-  }
-
-  Future<void> clearPortalPairing() async {
-    _settings = _settings.copyWith(
-      portalDeviceId: '',
-      portalDeviceSecret: '',
-      portalPin: '',
-      portalPairedAt: 0,
-      portalLastInboxSyncAt: 0,
-    );
-    await SettingsService.instance.save(_settings);
-    await _smsCaptureService.triggerNativeSync();
-    notifyListeners();
-  }
-
-  Future<void> savePortalInboxSyncAt(int timestamp) async {
-    _settings = _settings.copyWith(
-      portalLastInboxSyncAt: timestamp,
-    );
-    await SettingsService.instance.save(_settings);
     notifyListeners();
   }
 
@@ -298,10 +225,7 @@ class AppController extends ChangeNotifier {
           .toList(growable: false)
         ..sort((QueuedSms a, QueuedSms b) => b.createdAt.compareTo(a.createdAt));
       notifyListeners();
-    } catch (e) {
-      // ignore: avoid_print
-      print('app_controller: refreshHistory failed: $e');
-    }
+    } catch (_) {}
   }
 
   Future<void> _persistSnapshotToMessageStore(List<Map<String, dynamic>> snapshot) async {
@@ -362,7 +286,7 @@ class AppController extends ChangeNotifier {
               status: 'received',
             );
           } else {
-            await _messageStore.insertOutgoingMessage(
+            await _messageStore.insertOutgoingIfMissing(
               address: sender,
               body: body,
               timestamp: timestamp,
@@ -373,15 +297,12 @@ class AppController extends ChangeNotifier {
       });
 
       await SettingsService.instance.markInboxImported();
-    } catch (e) {
-      // ignore: avoid_print
-      print('app_controller: import inbox failed: $e');
-    }
+    } catch (_) {}
   }
 
   void _startInboxRefreshTimer() {
     _inboxRefreshTimer?.cancel();
-    _inboxRefreshTimer = Timer.periodic(const Duration(seconds: 45), (Timer _) async {
+    _inboxRefreshTimer = Timer.periodic(const Duration(seconds: 60), (Timer _) async {
       await _refreshInbox();
     });
   }
@@ -416,7 +337,7 @@ class AppController extends ChangeNotifier {
               status: 'received',
             );
           } else {
-            await _messageStore.insertOutgoingMessage(
+            await _messageStore.insertOutgoingIfMissing(
               address: sender,
               body: body,
               timestamp: timestamp,
@@ -425,26 +346,28 @@ class AppController extends ChangeNotifier {
           }
         }
       });
-    } catch (e) {
-      // ignore: avoid_print
-      print('app_controller: refresh inbox failed: $e');
-    }
+    } catch (_) {}
   }
 
   Future<void> _syncRulesToNative() async {
     try {
       final String json = await _messageStore.exportRulesJson();
       await _smsCaptureService.setCaptureRules(json);
-    } catch (e) {
-      // ignore: avoid_print
-      print('app_controller: sync rules failed: $e');
-    }
+    } catch (_) {}
   }
 
   Future<void> refreshRulesSync() async {
     await _syncRulesToNative();
   }
 
+  Future<void> handleAppResumed() async {
+    try {
+      await _refreshInbox();
+      await _refreshHistoryFromNative();
+      _isDefaultSmsApp = await _smsCaptureService.isDefaultSmsApp();
+      notifyListeners();
+    } catch (_) {}
+  }
 
   QueuedSms _mapNativeRowToQueuedSms(Map<String, dynamic> row) {
     final String body = (row['body'] as String? ?? '').trim();
@@ -457,14 +380,14 @@ class AppController extends ChangeNotifier {
     final int attemptCount = _asInt(row['attemptCount']);
     final String sender = parsed?.sender ?? (row['sender'] as String? ?? '');
     final String status = (row['status'] as String? ?? 'pending').trim();
-    final String lastEvent = (row['lastEvent'] as String? ?? '').trim();
-    final String lastError = (row['lastError'] as String? ?? '').trim();
 
     final DateTime fallbackLocal = DateTime.fromMillisecondsSinceEpoch(createdAt);
     return QueuedSms(
       id: _buildNativeRowId(row),
       sender: sender,
       messageBody: body,
+      createdAt: createdAt,
+      updatedAt: createdAt,
       amount: parsed?.amount ?? 0,
       transactionId: parsed?.transactionId ?? 'UNKNOWN',
       reference: parsed?.reference ?? 'UNKNOWN',
@@ -478,12 +401,17 @@ class AppController extends ChangeNotifier {
       lastError: (row['lastError'] as String?)?.trim().isEmpty == true
           ? null
           : (row['lastError'] as String?),
-      lastEvent: lastEvent.isEmpty
-          ? (lastError.isEmpty ? null : lastError)
-          : lastEvent,
-      createdAt: createdAt,
-      updatedAt: createdAt,
+      lastEvent: (row['lastEvent'] as String?)?.trim().isEmpty == true
+          ? null
+          : (row['lastEvent'] as String?),
     );
+  }
+
+  String _buildNativeRowId(Map<String, dynamic> row) {
+    final String sender = (row['sender'] as String? ?? '').trim();
+    final String body = (row['body'] as String? ?? '').trim();
+    final int timestamp = _asEpochMs(row['timestamp']);
+    return '$sender|$timestamp|${body.hashCode}';
   }
 
   int _asEpochMs(dynamic value) {
@@ -493,7 +421,10 @@ class AppController extends ChangeNotifier {
     if (value is num) {
       return value.toInt();
     }
-    return DateTime.now().millisecondsSinceEpoch;
+    if (value is String) {
+      return int.tryParse(value) ?? 0;
+    }
+    return 0;
   }
 
   int _asInt(dynamic value) {
@@ -503,37 +434,34 @@ class AppController extends ChangeNotifier {
     if (value is num) {
       return value.toInt();
     }
+    if (value is String) {
+      return int.tryParse(value) ?? 0;
+    }
     return 0;
-  }
-
-  String _buildNativeRowId(Map<String, dynamic> row) {
-    final String sender = row['sender'] as String? ?? '';
-    final String body = row['body'] as String? ?? '';
-    final int timestamp = _asEpochMs(row['timestamp']);
-    final String seed = '$sender|$body|$timestamp';
-    return 'native-${seed.hashCode.abs()}';
   }
 
   void _listenConnectivity() {
     _connectivitySub?.cancel();
-    _connectivitySub = Connectivity().onConnectivityChanged.listen((
-      List<ConnectivityResult> result,
-    ) async {
-      if (result.any((ConnectivityResult item) => item != ConnectivityResult.none)) {
-        await _smsCaptureService.triggerNativeSync();
-        await _refreshHistoryFromNative();
-        _status = 'Internet available: queue sync triggered';
-        notifyListeners();
+    _connectivitySub = Connectivity()
+        .onConnectivityChanged
+        .listen((List<ConnectivityResult> results) async {
+      final bool hasNet = results.any(
+        (ConnectivityResult r) => r != ConnectivityResult.none,
+      );
+      if (hasNet) {
+        try {
+          await _smsCaptureService.triggerNativeSync();
+          await _refreshHistoryFromNative();
+        } catch (_) {}
       }
     });
   }
 
   @override
   void dispose() {
-    _nativeDrainTimer?.cancel();
     _connectivitySub?.cancel();
+    _nativeDrainTimer?.cancel();
     _inboxRefreshTimer?.cancel();
-    _messageStore.close();
     super.dispose();
   }
 }

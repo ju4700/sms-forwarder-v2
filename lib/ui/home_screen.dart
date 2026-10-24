@@ -14,6 +14,7 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   late final TextEditingController _endpointController;
+  late final TextEditingController _secretController;
   static const Color _electricBlue = Color(0xFF009BFF);
   static const Color _cardBorder = Color(0xFFD8ECFF);
   bool _retrying = false;
@@ -24,6 +25,7 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _endpointController = TextEditingController();
+    _secretController = TextEditingController();
     widget.controller.addListener(_syncControllerText);
     _syncControllerText();
   }
@@ -32,13 +34,18 @@ class _HomeScreenState extends State<HomeScreen> {
   void dispose() {
     widget.controller.removeListener(_syncControllerText);
     _endpointController.dispose();
+    _secretController.dispose();
     super.dispose();
   }
 
   void _syncControllerText() {
     final String endpoint = widget.controller.settings.apiEndpoint;
+    final String secret = widget.controller.settings.apiSecret;
     if (_endpointController.text != endpoint) {
       _endpointController.text = endpoint;
+    }
+    if (_secretController.text != secret) {
+      _secretController.text = secret;
     }
     if (mounted) {
       setState(() {});
@@ -68,14 +75,14 @@ class _HomeScreenState extends State<HomeScreen> {
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(6),
+        borderRadius: BorderRadius.circular(8),
         border: Border.all(color: _cardBorder),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          Text(
-            'Status',
+          const Text(
+            'System Status',
             style: TextStyle(
               color: _electricBlue,
               fontSize: 16,
@@ -87,23 +94,21 @@ class _HomeScreenState extends State<HomeScreen> {
           const SizedBox(height: 8),
           Text(
             controller.permissionsGranted
-                ? 'SMS permission: granted'
-                : 'SMS permission: not granted',
+                ? 'SMS permission: Granted'
+                : 'SMS permission: Denied',
           ),
           const SizedBox(height: 8),
           Text(
             controller.isDefaultSmsApp
-                ? 'Default SMS app: enabled'
-                : 'Default SMS app: not set',
+                ? 'Default SMS app: Enabled (Full Capture & Delivery)'
+                : 'Default SMS app: Not set (May miss some background SMS)',
           ),
           const SizedBox(height: 8),
           if (!controller.isDefaultSmsApp)
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton(
-                onPressed: controller.requestDefaultSmsRole,
-                child: const Text('Set as Default SMS App'),
-              ),
+            ElevatedButton.icon(
+              onPressed: controller.requestDefaultSmsRole,
+              icon: const Icon(Icons.check_circle_outline),
+              label: const Text('Set as Default SMS App'),
             ),
         ],
       ),
@@ -115,25 +120,36 @@ class _HomeScreenState extends State<HomeScreen> {
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(6),
+        borderRadius: BorderRadius.circular(8),
         border: Border.all(color: _cardBorder),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          Text(
-            'Delivery Settings',
+          const Text(
+            'Delivery Webhook Settings',
             style: TextStyle(
               color: _electricBlue,
               fontWeight: FontWeight.w700,
+              fontSize: 16,
             ),
           ),
           const SizedBox(height: 10),
           TextField(
             controller: _endpointController,
             decoration: const InputDecoration(
-              labelText: 'API Endpoint',
-              hintText: 'https://example.com/api/transactions',
+              labelText: 'API Endpoint URL',
+              hintText: 'https://your-server.com/api/sms-webhook',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _secretController,
+            obscureText: true,
+            decoration: const InputDecoration(
+              labelText: 'API Secret / Bearer Token (Optional)',
+              hintText: 'Used for Authorization header & HMAC signature',
               border: OutlineInputBorder(),
             ),
           ),
@@ -141,22 +157,25 @@ class _HomeScreenState extends State<HomeScreen> {
           SizedBox(
             width: double.infinity,
             child: ElevatedButton(
-              onPressed: () => controller.saveEndpoint(_endpointController.text),
-              child: const Text('Save Endpoint'),
+              onPressed: () => controller.saveSettings(
+                endpoint: _endpointController.text,
+                secret: _secretController.text,
+              ),
+              child: const Text('Save Settings'),
             ),
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: 8),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
             value: controller.settings.foregroundReliabilityMode,
             title: const Text('Foreground reliability mode'),
-            subtitle: const Text('Improves Android 13+ reliability with persistent notification.'),
+            subtitle: const Text('Keeps monitor service alive with persistent notification.'),
             onChanged: controller.setForegroundMode,
           ),
           const SizedBox(height: 6),
           Center(
             child: SizedBox(
-              width: 220,
+              width: 240,
               child: OutlinedButton(
                 onPressed: _retrying || DateTime.now().millisecondsSinceEpoch < _retryCooldownUntil
                     ? null
@@ -166,8 +185,6 @@ class _HomeScreenState extends State<HomeScreen> {
                             DateTime.now().millisecondsSinceEpoch + 3000;
                         try {
                           await controller.retryFailed();
-                        } catch (_) {
-                          // controller.retryFailed is guarded, but protect UI anyway
                         } finally {
                           if (mounted) setState(() => _retrying = false);
                         }
@@ -178,7 +195,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         height: 18,
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
-                    : const Text('Retry Failed and Sync Now'),
+                    : const Text('Retry Failed & Sync Now'),
               ),
             ),
           ),
@@ -198,27 +215,27 @@ class _HomeScreenState extends State<HomeScreen> {
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(6),
+        borderRadius: BorderRadius.circular(8),
         border: Border.all(color: _cardBorder),
       ),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        mainAxisAlignment: MainAxisAlignment.spaceAround,
         children: <Widget>[
-          _statItem('Pending', pending),
-          _statItem('Sent', sent),
-          _statItem('Failed', failed),
+          _statItem('Pending', pending, Colors.orange),
+          _statItem('Sent', sent, Colors.green),
+          _statItem('Failed', failed, Colors.red),
         ],
       ),
     );
   }
 
-  Widget _statItem(String label, int value) {
+  Widget _statItem(String label, int value, Color color) {
     return Column(
       children: <Widget>[
         Text(
           '$value',
           style: TextStyle(
-            color: _electricBlue,
+            color: color,
             fontSize: 24,
             fontWeight: FontWeight.w700,
           ),
@@ -231,76 +248,148 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _buildHistory(List<QueuedSms> history) {
     if (history.isEmpty) {
       return Container(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(24),
+        alignment: Alignment.center,
         decoration: BoxDecoration(
-          border: Border.all(color: Colors.blue.shade200),
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: _cardBorder),
         ),
         child: const Text('No transaction SMS captured yet.'),
       );
     }
 
+    final List<QueuedSms> displayItems = history.take(25).toList(growable: false);
+
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(6),
+        borderRadius: BorderRadius.circular(8),
         border: Border.all(color: _cardBorder),
       ),
-      child: Column(
-        children: history.take(20).map((QueuedSms item) {
+      child: ListView.separated(
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        itemCount: displayItems.length,
+        separatorBuilder: (_, __) => Divider(height: 1, color: _cardBorder.withValues(alpha: 0.6)),
+        itemBuilder: (BuildContext context, int index) {
+          final QueuedSms item = displayItems[index];
           final bool isFailed = item.status == 'failed' || item.status == 'dead_letter';
           final bool isPending = item.status == 'pending' || item.status == 'retry_scheduled';
           final bool isRetrying = _retryingItems.contains(item.id);
-          return ListTile(
-            dense: true,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(6),
-            ),
-            title: Text('Tk ${item.amount.toStringAsFixed(2)} - ${item.reference}'),
-            subtitle: Text(
-              '${item.sender} | TrxID ${item.transactionId}\n${item.transactionLocalTime}',
-            ),
-            isThreeLine: true,
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
+
+          final Color statusColor = item.status == 'delivered'
+              ? Colors.green.shade800
+              : (isFailed ? Colors.red.shade800 : Colors.blue.shade800);
+          final Color statusBg = item.status == 'delivered'
+              ? Colors.green.shade50
+              : (isFailed ? Colors.red.shade50 : const Color(0xFFEAF6FF));
+
+          return Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
-                Chip(
-                  label: Text(item.status),
-                  backgroundColor: const Color(0xFFEAF6FF),
-                  side: BorderSide.none,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(6),
-                  ),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: <Widget>[
+                    Expanded(
+                      child: Text(
+                        'Tk ${item.amount.toStringAsFixed(2)} - ${item.reference}',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w700,
+                          fontSize: 15,
+                          color: Color(0xFF0B2B4B),
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: statusBg,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                        item.status,
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: statusColor,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
-                if (isFailed || isPending) ...<Widget>[
-                  const SizedBox(width: 8),
-                  OutlinedButton(
-                    onPressed: isRetrying
-                        ? null
-                        : () async {
-                            setState(() => _retryingItems.add(item.id));
-                            try {
-                              await widget.controller.retrySingle(item);
-                            } catch (_) {
-                              // controller.retrySingle is guarded
-                            } finally {
-                              if (mounted) {
-                                setState(() => _retryingItems.remove(item.id));
-                              }
-                            }
-                          },
-                    child: isRetrying
-                        ? const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Text('Send'),
-                  ),
-                ],
+                const SizedBox(height: 6),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: <Widget>[
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          Text(
+                            '${item.sender} | TrxID: ${item.transactionId}',
+                            style: TextStyle(
+                              fontSize: 12.5,
+                              color: Colors.grey.shade700,
+                              fontWeight: FontWeight.w500,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            item.transactionLocalTime,
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: Colors.grey.shade500,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    if (isFailed || isPending) ...<Widget>[
+                      const SizedBox(width: 8),
+                      SizedBox(
+                        height: 32,
+                        child: OutlinedButton(
+                          style: OutlinedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(horizontal: 12),
+                            minimumSize: Size.zero,
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                          onPressed: isRetrying
+                              ? null
+                              : () async {
+                                  setState(() => _retryingItems.add(item.id));
+                                  try {
+                                    await widget.controller.retrySingle(item);
+                                  } finally {
+                                    if (mounted) {
+                                      setState(() => _retryingItems.remove(item.id));
+                                    }
+                                  }
+                                },
+                          child: isRetrying
+                              ? const SizedBox(
+                                  width: 14,
+                                  height: 14,
+                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                )
+                              : const Text('Send', style: TextStyle(fontSize: 12)),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
               ],
             ),
           );
-        }).toList(),
+        },
       ),
     );
   }

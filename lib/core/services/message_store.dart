@@ -15,7 +15,6 @@ class MessageThreads extends Table {
   IntColumn get lastMessageAt => integer()();
   TextColumn get lastSnippet => text().nullable()();
   IntColumn get unreadCount => integer().withDefault(const Constant(0))();
-
 }
 
 class Messages extends Table {
@@ -31,7 +30,6 @@ class Messages extends Table {
   TextColumn get apiEndpoint => text().nullable()();
   IntColumn get retryCount => integer().withDefault(const Constant(0))();
   IntColumn get nextRetryAt => integer().nullable()();
-
 }
 
 class CaptureRules extends Table {
@@ -59,6 +57,7 @@ class MessageStore extends _$MessageStore {
     String? displayName,
     required int lastMessageAt,
     String? lastSnippet,
+    bool incrementUnread = false,
   }) async {
     final MessageThread? existing = await (select(messageThreads)
           ..where((MessageThreads tbl) => tbl.address.equals(address)))
@@ -71,6 +70,7 @@ class MessageStore extends _$MessageStore {
         displayName: Value<String?>(displayName ?? existing.displayName),
         lastMessageAt: Value<int>(lastMessageAt),
         lastSnippet: Value<String?>(lastSnippet ?? existing.lastSnippet),
+        unreadCount: Value<int>(incrementUnread ? existing.unreadCount + 1 : existing.unreadCount),
       ));
       return existing.id;
     }
@@ -80,7 +80,18 @@ class MessageStore extends _$MessageStore {
       displayName: Value<String?>(displayName),
       lastMessageAt: lastMessageAt,
       lastSnippet: Value<String?>(lastSnippet),
+      unreadCount: Value<int>(incrementUnread ? 1 : 0),
     ));
+  }
+
+  Future<void> markThreadRead(int threadId) async {
+    await (update(messageThreads)..where((MessageThreads tbl) => tbl.id.equals(threadId)))
+        .write(const MessageThreadsCompanion(unreadCount: Value<int>(0)));
+  }
+
+  Future<void> deleteThread(int threadId) async {
+    await (delete(messages)..where((Messages tbl) => tbl.threadId.equals(threadId))).go();
+    await (delete(messageThreads)..where((MessageThreads tbl) => tbl.id.equals(threadId))).go();
   }
 
   Future<int> insertIncomingMessage({
@@ -95,6 +106,7 @@ class MessageStore extends _$MessageStore {
       address: address,
       lastMessageAt: timestamp,
       lastSnippet: body.isEmpty ? null : body.substring(0, body.length.clamp(0, 120)),
+      incrementUnread: true,
     );
 
     return into(messages).insert(MessagesCompanion.insert(
@@ -169,19 +181,54 @@ class MessageStore extends _$MessageStore {
     ));
   }
 
+  Future<void> insertOutgoingIfMissing({
+    required String address,
+    required String body,
+    required int timestamp,
+    required String status,
+  }) async {
+    final Message? existing = await (select(messages)
+          ..where((Messages tbl) => tbl.address.equals(address))
+          ..where((Messages tbl) => tbl.timestamp.equals(timestamp))
+          ..where((Messages tbl) => tbl.body.equals(body)))
+        .getSingleOrNull();
+
+    if (existing != null) {
+      if (existing.status != status) {
+        await (update(messages)..where((Messages tbl) => tbl.id.equals(existing.id)))
+            .write(MessagesCompanion(status: Value<String>(status)));
+      }
+      return;
+    }
+
+    await insertOutgoingMessage(
+      address: address,
+      body: body,
+      timestamp: timestamp,
+      status: status,
+    );
+  }
+
+  Future<void> updateMessageStatus(int id, String status) async {
+    await (update(messages)..where((Messages tbl) => tbl.id.equals(id)))
+        .write(MessagesCompanion(status: Value<String>(status)));
+  }
+
   Stream<List<MessageThread>> watchThreads() {
     return (select(messageThreads)
           ..orderBy(<OrderingTerm Function(MessageThreads)>[
-            (MessageThreads t) => OrderingTerm.desc(t.lastMessageAt),
+            (MessageThreads tbl) =>
+                OrderingTerm(expression: tbl.lastMessageAt, mode: OrderingMode.desc),
           ]))
         .watch();
   }
 
   Stream<List<Message>> watchMessagesForThread(int threadId) {
     return (select(messages)
-          ..where((Messages t) => t.threadId.equals(threadId))
+          ..where((Messages tbl) => tbl.threadId.equals(threadId))
           ..orderBy(<OrderingTerm Function(Messages)>[
-            (Messages t) => OrderingTerm.asc(t.timestamp),
+            (Messages tbl) =>
+                OrderingTerm(expression: tbl.timestamp, mode: OrderingMode.asc),
           ]))
         .watch();
   }
@@ -189,7 +236,8 @@ class MessageStore extends _$MessageStore {
   Stream<List<CaptureRule>> watchRules() {
     return (select(captureRules)
           ..orderBy(<OrderingTerm Function(CaptureRules)>[
-            (CaptureRules t) => OrderingTerm.asc(t.name),
+            (CaptureRules tbl) =>
+                OrderingTerm(expression: tbl.updatedAt, mode: OrderingMode.desc),
           ]))
         .watch();
   }
@@ -245,9 +293,32 @@ class MessageStore extends _$MessageStore {
     await (delete(captureRules)..where((CaptureRules t) => t.id.equals(id))).go();
   }
 
+  Future<void> ensureDefaultRules() async {
+    final List<CaptureRule> existing = await select(captureRules).get();
+    if (existing.isEmpty) {
+      await insertRule(
+        name: 'All Financial Transactions',
+        type: 'template',
+        templateKey: 'all',
+        notes: jsonEncode(<String, dynamic>{
+          'direction': 'credit',
+          'minAmount': 0.0,
+          'filterSpam': true,
+          'filterOtp': true,
+        }),
+      );
+    }
+  }
+
   Future<String> exportRulesJson() async {
     final List<CaptureRule> rules = await select(captureRules).get();
     final List<Map<String, dynamic>> payload = rules.map((CaptureRule rule) {
+      Map<String, dynamic> extra = <String, dynamic>{};
+      if (rule.notes != null && rule.notes!.isNotEmpty) {
+        try {
+          extra = jsonDecode(rule.notes!) as Map<String, dynamic>;
+        } catch (_) {}
+      }
       return <String, dynamic>{
         'id': rule.id,
         'name': rule.name,
@@ -256,6 +327,10 @@ class MessageStore extends _$MessageStore {
         'bodyPattern': rule.bodyPattern,
         'templateKey': rule.templateKey,
         'enabled': rule.enabled,
+        'direction': extra['direction'] ?? 'credit',
+        'minAmount': extra['minAmount'] ?? 0.0,
+        'filterSpam': extra['filterSpam'] ?? true,
+        'filterOtp': extra['filterOtp'] ?? true,
       };
     }).toList(growable: false);
 

@@ -7,8 +7,9 @@ import org.json.JSONObject
 object SmsQueueStore {
     private const val prefsName = "sms_forwarder_native"
     private const val keyQueue = "captured_sms_queue"
-    private const val maxQueueSize = 300
+    private const val maxQueueSize = 1000
 
+    @Synchronized
     fun enqueue(context: Context, sender: String, body: String, timestamp: Long, shouldForward: Boolean): Boolean {
         val queue = readQueue(context)
         if (containsMessage(queue, sender, body, timestamp)) {
@@ -24,10 +25,8 @@ object SmsQueueStore {
             put("nextRetryAt", 0L)
             put("status", if (shouldForward) "pending" else "captured")
             put("forward", shouldForward)
-            put("portalStatus", "pending")
-            put("portalAttemptCount", 0)
-            put("portalNextRetryAt", 0L)
-            put("portalLastEvent", "")
+            put("lastError", "")
+            put("lastEvent", if (shouldForward) "Queued for delivery" else "Captured locally")
         }
         queue.add(item)
 
@@ -48,10 +47,12 @@ object SmsQueueStore {
         }
     }
 
+    @Synchronized
     fun containsMessage(context: Context, sender: String, body: String, timestamp: Long): Boolean {
         return containsMessage(readQueue(context), sender, body, timestamp)
     }
 
+    @Synchronized
     fun readQueue(context: Context): MutableList<JSONObject> {
         val prefs = context.getSharedPreferences(prefsName, Context.MODE_PRIVATE)
         val raw = prefs.getString(keyQueue, "[]") ?: "[]"
@@ -64,6 +65,7 @@ object SmsQueueStore {
         return out
     }
 
+    @Synchronized
     fun writeQueue(context: Context, items: List<JSONObject>) {
         val trimmed = if (items.size > maxQueueSize) {
             items.takeLast(maxQueueSize)
@@ -81,6 +83,35 @@ object SmsQueueStore {
         }
     }
 
+    @Synchronized
+    fun updateItem(
+        context: Context,
+        sender: String,
+        body: String,
+        timestamp: Long,
+        status: String,
+        attemptCount: Int,
+        nextRetryAt: Long,
+        lastEvent: String,
+        lastError: String = "",
+    ) {
+        val queue = readQueue(context)
+        val target = queue.find { item ->
+            item.optString("sender", "") == sender &&
+                item.optString("body", "") == body &&
+                item.optLong("timestamp", 0L) == timestamp
+        }
+        if (target != null) {
+            target.put("status", status)
+            target.put("attemptCount", attemptCount)
+            target.put("nextRetryAt", nextRetryAt)
+            target.put("lastEvent", lastEvent)
+            target.put("lastError", lastError)
+            writeQueue(context, queue)
+        }
+    }
+
+    @Synchronized
     fun snapshot(context: Context): List<Map<String, Any>> {
         val queue = readQueue(context)
         return queue.map { item ->
@@ -94,14 +125,11 @@ object SmsQueueStore {
                 "lastError" to item.optString("lastError", ""),
                 "lastEvent" to item.optString("lastEvent", ""),
                 "forward" to item.optBoolean("forward", false),
-                "portalStatus" to item.optString("portalStatus", "pending"),
-                "portalAttemptCount" to item.optInt("portalAttemptCount", 0),
-                "portalNextRetryAt" to item.optLong("portalNextRetryAt", 0L),
-                "portalLastEvent" to item.optString("portalLastEvent", ""),
             )
         }
     }
 
+    @Synchronized
     fun retryDeadLetters(context: Context): Int {
         val queue = readQueue(context)
         val now = System.currentTimeMillis()
@@ -121,6 +149,7 @@ object SmsQueueStore {
         return retried
     }
 
+    @Synchronized
     fun retrySingle(context: Context, sender: String, body: String, timestamp: Long): Boolean {
         val queue = readQueue(context)
         val now = System.currentTimeMillis()
@@ -147,5 +176,4 @@ object SmsQueueStore {
         }
         return updated
     }
-
 }

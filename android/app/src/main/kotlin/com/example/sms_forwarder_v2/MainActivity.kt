@@ -1,22 +1,98 @@
 package com.example.sms_forwarder_v2
 
+import android.app.NotificationManager
 import android.app.role.RoleManager
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
-import android.provider.Telephony
-import android.telephony.SmsManager
+import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
-import android.net.Uri
-import io.flutter.embedding.engine.FlutterEngine
+import android.provider.Telephony
+import android.telephony.SmsManager
+import android.util.Log
 import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
 	private val channelName = "sms_forwarder_v2/foreground_service"
 	private val smsBridgeChannelName = "sms_forwarder_v2/sms_bridge"
 	private val roleRequestCode = 9341
+
+	private var pendingSendIntent: Map<String, String>? = null
+	private var smsMethodChannel: MethodChannel? = null
+
+	override fun onCreate(savedInstanceState: Bundle?) {
+		super.onCreate(savedInstanceState)
+		handleSendIntent(intent)
+	}
+
+	override fun onNewIntent(intent: Intent) {
+		super.onNewIntent(intent)
+		setIntent(intent)
+		handleSendIntent(intent)
+	}
+
+	override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+		super.cleanUpFlutterEngine(flutterEngine)
+		smsMethodChannel = null
+	}
+
+	private fun handleSendIntent(intent: Intent?) {
+		val parsed = parseSendToIntent(intent) ?: return
+		pendingSendIntent = parsed
+		smsMethodChannel?.invokeMethod("onSendToIntent", parsed)
+	}
+
+	private fun parseSendToIntent(intent: Intent?): Map<String, String>? {
+		if (intent == null) return null
+		val action = intent.action
+		if (action != Intent.ACTION_SENDTO && action != Intent.ACTION_VIEW && action != Intent.ACTION_SEND) {
+			return null
+		}
+
+		var address = ""
+		var body = ""
+
+		val uri = intent.data
+		if (uri != null) {
+			val scheme = uri.scheme?.lowercase()
+			if (scheme == "sms" || scheme == "smsto" || scheme == "mms" || scheme == "mmsto") {
+				val ssp = uri.schemeSpecificPart ?: ""
+				if (ssp.contains("?")) {
+					val parts = ssp.split("?", limit = 2)
+					address = Uri.decode(parts[0])
+					val query = parts[1]
+					for (param in query.split("&")) {
+						val kv = param.split("=", limit = 2)
+						if (kv.isNotEmpty() && kv[0].equals("body", ignoreCase = true)) {
+							body = if (kv.size > 1) Uri.decode(kv[1]) else ""
+						}
+					}
+				} else {
+					address = Uri.decode(ssp)
+				}
+			}
+		}
+
+		if (body.isBlank()) {
+			body = intent.getStringExtra("sms_body")
+				?: intent.getStringExtra(Intent.EXTRA_TEXT)
+				?: ""
+		}
+
+		if (address.isBlank()) {
+			address = intent.getStringExtra(Intent.EXTRA_PHONE_NUMBER) ?: ""
+		}
+
+		if (address.isNotBlank() || body.isNotBlank()) {
+			return mapOf("address" to address, "body" to body)
+		}
+		return null
+	}
 
 	override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
 		super.configureFlutterEngine(flutterEngine)
@@ -39,9 +115,20 @@ class MainActivity : FlutterActivity() {
 				}
 			}
 
-		MethodChannel(flutterEngine.dartExecutor.binaryMessenger, smsBridgeChannelName)
-			.setMethodCallHandler { call, result ->
+		val bridgeChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, smsBridgeChannelName)
+		smsMethodChannel = bridgeChannel
+		bridgeChannel.setMethodCallHandler { call, result ->
 				when (call.method) {
+					"getInitialSendIntent" -> {
+						try {
+							val data = pendingSendIntent
+							pendingSendIntent = null
+							result.success(data)
+						} catch (e: Exception) {
+							result.error("INTENT_ERROR", e.message, null)
+						}
+					}
+
 					"isDefaultSmsApp" -> {
 						try {
 							result.success(isDefaultSmsApp())
@@ -156,6 +243,45 @@ class MainActivity : FlutterActivity() {
 						}
 					}
 
+					"markThreadRead" -> {
+						try {
+							val address = call.argument<String>("address")?.trim().orEmpty()
+							if (address.isNotBlank()) {
+								val values = ContentValues().apply {
+									put(Telephony.Sms.READ, 1)
+									put(Telephony.Sms.SEEN, 1)
+								}
+								contentResolver.update(
+									Telephony.Sms.CONTENT_URI,
+									values,
+									"${Telephony.Sms.ADDRESS} = ? AND ${Telephony.Sms.READ} = 0",
+									arrayOf(address)
+								)
+								val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+								notificationManager?.cancel(address.hashCode().and(0x7FFFFFFF))
+							}
+							result.success(true)
+						} catch (e: Exception) {
+							result.error("MARK_READ_ERROR", e.message, null)
+						}
+					}
+
+					"deleteThread" -> {
+						try {
+							val address = call.argument<String>("address")?.trim().orEmpty()
+							if (address.isNotBlank()) {
+								contentResolver.delete(
+									Telephony.Sms.CONTENT_URI,
+									"${Telephony.Sms.ADDRESS} = ?",
+									arrayOf(address)
+								)
+							}
+							result.success(true)
+						} catch (e: Exception) {
+							result.error("DELETE_THREAD_ERROR", e.message, null)
+						}
+					}
+
 					else -> result.notImplemented()
 				}
 			}
@@ -167,12 +293,34 @@ class MainActivity : FlutterActivity() {
 		} else {
 			SmsManager.getDefault()
 		}
-		manager.sendTextMessage(address, null, body, null, null)
+		val parts = manager.divideMessage(body)
+		if (parts.size > 1) {
+			manager.sendMultipartTextMessage(address, null, parts, null, null)
+		} else {
+			manager.sendTextMessage(address, null, body, null, null)
+		}
+		saveSentSmsToSystem(address, body)
+	}
+
+	private fun saveSentSmsToSystem(address: String, body: String) {
+		try {
+			val values = ContentValues().apply {
+				put(Telephony.Sms.ADDRESS, address)
+				put(Telephony.Sms.BODY, body)
+				put(Telephony.Sms.DATE, System.currentTimeMillis())
+				put(Telephony.Sms.READ, 1)
+				put(Telephony.Sms.SEEN, 1)
+				put(Telephony.Sms.TYPE, Telephony.Sms.MESSAGE_TYPE_SENT)
+			}
+			contentResolver.insert(Telephony.Sms.Sent.CONTENT_URI, values)
+		} catch (e: Exception) {
+			Log.e("MainActivity", "Failed to save sent SMS to system: ${e.message}")
+		}
 	}
 
 	private fun importInbox(limit: Int): List<Map<String, Any>> {
 		val result = mutableListOf<Map<String, Any>>()
-		val uri = Telephony.Sms.Inbox.CONTENT_URI
+		val uri = Telephony.Sms.CONTENT_URI
 		val projection = arrayOf(
 			Telephony.Sms.ADDRESS,
 			Telephony.Sms.BODY,

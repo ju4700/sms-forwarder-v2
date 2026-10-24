@@ -14,6 +14,7 @@ class LogsScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final List<QueuedSms> items = controller.history;
+    final List<QueuedSms> displayItems = items.take(40).toList(growable: false);
 
     return ListView(
       padding: const EdgeInsets.all(16),
@@ -23,32 +24,97 @@ class LogsScreen extends StatelessWidget {
         Container(
           decoration: BoxDecoration(
             color: Colors.white,
-            borderRadius: BorderRadius.circular(6),
+            borderRadius: BorderRadius.circular(8),
             border: Border.all(color: _cardBorder),
           ),
-          child: items.isEmpty
+          child: displayItems.isEmpty
               ? const Padding(
                   padding: EdgeInsets.all(16),
                   child: Text('No log entries yet.'),
                 )
-              : Column(
-                  children: items.take(40).map((QueuedSms item) {
-                    return ListTile(
-                      title: Text('${item.reference} · Tk ${item.amount.toStringAsFixed(2)}'),
-                      subtitle: Text(
-                        '${item.sender}\n${item.transactionLocalTime}\n${item.lastEvent ?? item.status}',
-                      ),
-                      isThreeLine: true,
-                      trailing: Chip(
-                        label: Text(item.status),
-                        backgroundColor: const Color(0xFFEAF6FF),
-                        side: BorderSide.none,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(6),
-                        ),
+              : ListView.separated(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  itemCount: displayItems.length,
+                  separatorBuilder: (_, __) => Divider(height: 1, color: _cardBorder.withValues(alpha: 0.6)),
+                  itemBuilder: (BuildContext context, int index) {
+                    final QueuedSms item = displayItems[index];
+                    final bool isDelivered = item.status == 'delivered';
+                    final bool isFailed = item.status == 'failed' || item.status == 'dead_letter';
+
+                    final Color statusColor = isDelivered
+                        ? Colors.green.shade800
+                        : (isFailed ? Colors.red.shade800 : Colors.blue.shade800);
+                    final Color statusBg = isDelivered
+                        ? Colors.green.shade50
+                        : (isFailed ? Colors.red.shade50 : const Color(0xFFEAF6FF));
+
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          Row(
+                            children: <Widget>[
+                              Expanded(
+                                child: Text(
+                                  '${item.reference} - Tk ${item.amount.toStringAsFixed(2)}',
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 14.5,
+                                    color: Color(0xFF0B2B4B),
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                decoration: BoxDecoration(
+                                  color: statusBg,
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: Text(
+                                  item.status,
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w600,
+                                    color: statusColor,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 5),
+                          Text(
+                            item.sender,
+                            style: TextStyle(fontSize: 12.5, color: Colors.grey.shade700, fontWeight: FontWeight.w500),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          const SizedBox(height: 2),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: <Widget>[
+                              Expanded(
+                                child: Text(
+                                  item.lastEvent ?? item.status,
+                                  style: TextStyle(fontSize: 11.5, color: Colors.grey.shade600),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              Text(
+                                item.transactionLocalTime,
+                                style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
+                              ),
+                            ],
+                          ),
+                        ],
                       ),
                     );
-                  }).toList(),
+                  },
                 ),
         ),
       ],
@@ -67,7 +133,7 @@ class LogsScreen extends StatelessWidget {
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(6),
+        borderRadius: BorderRadius.circular(8),
         border: Border.all(color: _cardBorder),
       ),
       child: Row(

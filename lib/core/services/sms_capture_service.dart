@@ -158,4 +158,58 @@ class SmsCaptureService {
       print('sms_capture_service: request battery ignore failed: $e');
     }
   }
+
+  Future<bool> markThreadRead(String address) async {
+    try {
+      return await _channel.invokeMethod<bool>('markThreadRead', <String, dynamic>{
+            'address': address,
+          }) ??
+          false;
+    } catch (e) {
+      // ignore: avoid_print
+      print('sms_capture_service: markThreadRead failed: $e');
+      return false;
+    }
+  }
+
+  Future<bool> deleteThread(String address) async {
+    try {
+      return await _channel.invokeMethod<bool>('deleteThread', <String, dynamic>{
+            'address': address,
+          }) ??
+          false;
+    } catch (e) {
+      // ignore: avoid_print
+      print('sms_capture_service: deleteThread failed: $e');
+      return false;
+    }
+  }
+
+  Future<Map<String, String>?> getInitialSendIntent() async {
+    try {
+      final dynamic res = await _channel.invokeMethod<dynamic>('getInitialSendIntent');
+      if (res is Map) {
+        return res.map((dynamic k, dynamic v) => MapEntry(k.toString(), v?.toString() ?? ''));
+      }
+      return null;
+    } catch (e) {
+      // ignore: avoid_print
+      print('sms_capture_service: getInitialSendIntent failed: $e');
+      return null;
+    }
+  }
+
+  void registerSendIntentHandler(void Function(Map<String, String> data) handler) {
+    _channel.setMethodCallHandler((MethodCall call) async {
+      if (call.method == 'onSendToIntent') {
+        if (call.arguments is Map) {
+          final Map<dynamic, dynamic> args = call.arguments as Map<dynamic, dynamic>;
+          final Map<String, String> map = args.map(
+            (dynamic k, dynamic v) => MapEntry(k.toString(), v?.toString() ?? ''),
+          );
+          handler(map);
+        }
+      }
+    });
+  }
 }

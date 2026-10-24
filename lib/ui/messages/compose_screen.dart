@@ -10,11 +10,13 @@ class ComposeScreen extends StatefulWidget {
     required this.store,
     required this.captureService,
     this.initialRecipient,
+    this.initialBody,
   });
 
   final MessageStore store;
   final SmsCaptureService captureService;
   final String? initialRecipient;
+  final String? initialBody;
 
   @override
   State<ComposeScreen> createState() => _ComposeScreenState();
@@ -32,7 +34,7 @@ class _ComposeScreenState extends State<ComposeScreen> {
   void initState() {
     super.initState();
     _recipientController = TextEditingController(text: widget.initialRecipient ?? '');
-    _bodyController = TextEditingController();
+    _bodyController = TextEditingController(text: widget.initialBody ?? '');
     _recipientController.addListener(_syncCanSend);
     _bodyController.addListener(_syncCanSend);
     _syncCanSend();
@@ -65,7 +67,7 @@ class _ComposeScreenState extends State<ComposeScreen> {
     }
 
     final int timestamp = DateTime.now().millisecondsSinceEpoch;
-    await widget.store.insertOutgoingMessage(
+    final int messageId = await widget.store.insertOutgoingMessage(
       address: recipient,
       body: body,
       timestamp: timestamp,
@@ -77,11 +79,9 @@ class _ComposeScreenState extends State<ComposeScreen> {
       body: body,
     );
 
-    await widget.store.insertOutgoingMessage(
-      address: recipient,
-      body: body,
-      timestamp: timestamp + 1,
-      status: sent ? 'sent' : 'send_failed',
+    await widget.store.updateMessageStatus(
+      messageId,
+      sent ? 'sent' : 'send_failed',
     );
 
     if (mounted) {
