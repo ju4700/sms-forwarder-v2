@@ -1,14 +1,16 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 
 import 'models/queued_sms.dart';
-import 'services/bkash_parser.dart';
 import 'services/foreground_service_controller.dart';
 import 'services/message_store.dart';
 import 'services/settings_service.dart';
 import 'services/sms_capture_service.dart';
+import 'services/transaction_parser.dart';
 
 class AppController extends ChangeNotifier {
   AppController()
@@ -107,11 +109,15 @@ class AppController extends ChangeNotifier {
         _status = 'SMS permission denied';
       }
 
+      // Always ensure default rules exist and sync to native
+      try {
+        await _messageStore.ensureDefaultRules();
+        await _syncRulesToNative();
+      } catch (_) {}
+
       // Import inbox once after permissions granted
       if (_permissionsGranted) {
         await _importInboxOnce();
-        await _messageStore.ensureDefaultRules();
-        await _syncRulesToNative();
         _startInboxRefreshTimer();
       }
 
@@ -169,6 +175,100 @@ class AppController extends ChangeNotifier {
     );
   }
 
+  Future<Map<String, dynamic>> testWebhookDelivery({String? customEndpoint, String? customSecret}) async {
+    final String endpoint = (customEndpoint ?? _settings.apiEndpoint).trim();
+    final String secret = (customSecret ?? _settings.apiSecret).trim();
+
+    if (endpoint.isEmpty) {
+      return <String, dynamic>{
+        'success': false,
+        'message': 'API Endpoint URL is empty. Please enter an endpoint first.',
+      };
+    }
+
+    _status = 'Testing webhook delivery...';
+    notifyListeners();
+
+    try {
+      final int now = DateTime.now().millisecondsSinceEpoch;
+      final String nowIso = DateTime.now().toIso8601String();
+      final String nowUtc = DateTime.now().toUtc().toIso8601String();
+      final String testTrxId = 'TEST${now % 1000000}';
+
+      final Map<String, dynamic> testPayload = <String, dynamic>{
+        'schemaVersion': '2.0',
+        'idempotencyKey': 'test-webhook-$now',
+        'provider': 'bkash',
+        'direction': 'credit',
+        'number': '01700000000',
+        'sender': '01700000000',
+        'amount': 500.0,
+        'fee': 0.0,
+        'balance': 1500.0,
+        'transactionId': testTrxId,
+        'reference': 'TEST_WEBHOOK',
+        'datetimeLocal': nowIso,
+        'datetimeUtc': nowUtc,
+        'isParsed': true,
+        'rawSms': 'You have received Tk 500.00 from 01700000000. Ref TEST_WEBHOOK. Fee Tk 0.00. Balance Tk 1,500.00. TrxID $testTrxId at $nowIso',
+        'metadata': <String, dynamic>{
+          'rawSms': 'You have received Tk 500.00 from 01700000000. Ref TEST_WEBHOOK. Fee Tk 0.00. Balance Tk 1,500.00. TrxID $testTrxId at $nowIso',
+          'parserVersion': '2.0.0-multi',
+          'isTestDelivery': true,
+        },
+      };
+
+      final Uri uri = Uri.parse(endpoint);
+      final Map<String, String> headers = <String, String>{
+        'Content-Type': 'application/json; charset=utf-8',
+        'X-Idempotency-Key': 'test-webhook-$now',
+      };
+      if (secret.isNotEmpty) {
+        headers['Authorization'] = 'Bearer $secret';
+      }
+
+      final http.Response response = await http
+          .post(
+            uri,
+            headers: headers,
+            body: jsonEncode(testPayload),
+          )
+          .timeout(const Duration(seconds: 15));
+
+      final bool success = response.statusCode >= 200 && response.statusCode < 300;
+
+      // Also enqueue test SMS into native queue so it shows in delivery queue and history
+      try {
+        await _smsCaptureService.enqueueTestSms(
+          sender: 'bKash',
+          body: testPayload['rawSms'] as String,
+        );
+        await _refreshHistoryFromNative();
+      } catch (_) {}
+
+      _status = success
+          ? 'Webhook test succeeded (HTTP ${response.statusCode})'
+          : 'Webhook test failed (HTTP ${response.statusCode})';
+      notifyListeners();
+
+      return <String, dynamic>{
+        'success': success,
+        'statusCode': response.statusCode,
+        'responseBody': response.body,
+        'message': success
+            ? 'Success: Webhook responded with HTTP ${response.statusCode}'
+            : 'Server returned HTTP ${response.statusCode}: ${response.body}',
+      };
+    } catch (e) {
+      _status = 'Webhook test error: $e';
+      notifyListeners();
+      return <String, dynamic>{
+        'success': false,
+        'message': 'Connection error: $e',
+      };
+    }
+  }
+
   Future<void> setForegroundMode(bool value) async {
     _settings = _settings.copyWith(foregroundReliabilityMode: value);
     await SettingsService.instance.save(_settings);
@@ -200,7 +300,7 @@ class AppController extends ChangeNotifier {
     try {
       await _syncRulesToNative();
       await _smsCaptureService.retrySingle(
-        sender: item.sender,
+        sender: item.rawSender ?? item.sender,
         body: item.messageBody,
         timestamp: item.createdAt,
       );
@@ -217,10 +317,8 @@ class AppController extends ChangeNotifier {
     try {
       final List<Map<String, dynamic>> snapshot = await _smsCaptureService.fetchQueueSnapshot();
       await _persistSnapshotToMessageStore(snapshot);
-      final List<Map<String, dynamic>> forwardRows = snapshot
+      _history = snapshot
           .where((Map<String, dynamic> row) => row['forward'] == true)
-          .toList(growable: false);
-      _history = forwardRows
           .map(_mapNativeRowToQueuedSms)
           .toList(growable: false)
         ..sort((QueuedSms a, QueuedSms b) => b.createdAt.compareTo(a.createdAt));
@@ -371,30 +469,31 @@ class AppController extends ChangeNotifier {
 
   QueuedSms _mapNativeRowToQueuedSms(Map<String, dynamic> row) {
     final String body = (row['body'] as String? ?? '').trim();
-    final ParsedBkashTransaction? parsed = BkashParser.parse(
+    final String rawSender = (row['sender'] as String? ?? '').trim();
+    final ParsedTransaction parsed = TransactionParser.parse(
       body,
-      fallbackSender: row['sender'] as String?,
+      fallbackSender: rawSender,
     );
     final int createdAt = _asEpochMs(row['timestamp']);
     final int nextRetryAt = _asEpochMs(row['nextRetryAt']);
     final int attemptCount = _asInt(row['attemptCount']);
-    final String sender = parsed?.sender ?? (row['sender'] as String? ?? '');
+    final String sender = parsed.sender.isNotEmpty ? parsed.sender : rawSender;
     final String status = (row['status'] as String? ?? 'pending').trim();
 
-    final DateTime fallbackLocal = DateTime.fromMillisecondsSinceEpoch(createdAt);
     return QueuedSms(
       id: _buildNativeRowId(row),
       sender: sender,
+      rawSender: rawSender,
       messageBody: body,
       createdAt: createdAt,
       updatedAt: createdAt,
-      amount: parsed?.amount ?? 0,
-      transactionId: parsed?.transactionId ?? 'UNKNOWN',
-      reference: parsed?.reference ?? 'UNKNOWN',
-      transactionLocalTime: parsed?.localIso ?? fallbackLocal.toIso8601String(),
-      transactionUtcTime: parsed?.utcIso ?? fallbackLocal.toUtc().toIso8601String(),
-      fee: parsed?.fee ?? 0,
-      balance: parsed?.balance ?? 0,
+      amount: parsed.amount,
+      transactionId: parsed.transactionId,
+      reference: parsed.reference,
+      transactionLocalTime: parsed.localIso,
+      transactionUtcTime: parsed.utcIso,
+      fee: parsed.fee,
+      balance: parsed.balance,
       status: status,
       attemptCount: attemptCount,
       nextRetryAt: nextRetryAt == 0 ? null : nextRetryAt,

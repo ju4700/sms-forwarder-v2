@@ -23,6 +23,7 @@ class SmsReceiver : BroadcastReceiver() {
     }
 
     override fun onReceive(context: Context, intent: Intent) {
+        val pendingResult = goAsync()
         val action = intent.action
         val isDefaultSmsApp = isDefaultSmsApp(context)
         val shouldProcess = when {
@@ -31,6 +32,7 @@ class SmsReceiver : BroadcastReceiver() {
         }
 
         if (!shouldProcess) {
+            try { pendingResult.finish() } catch (_: Exception) {}
             return
         }
 
@@ -72,17 +74,24 @@ class SmsReceiver : BroadcastReceiver() {
             val shouldForward = ruleMatches(context, sender, body)
             Log.i("SmsReceiver", "Captured SMS from $sender (${body.length} chars), forward=$shouldForward")
 
-            val enqueued = SmsQueueStore.enqueue(context, sender, body, timestamp, shouldForward)
+            if (!shouldForward) {
+                Log.d("SmsReceiver", "SMS from $sender does not match any forward rules, skipping queue")
+                return
+            }
+
+            val enqueued = SmsQueueStore.enqueue(context, sender, body, timestamp, true)
             if (!enqueued) {
                 return
             }
 
-            if (shouldForward) {
-                NativeWorkScheduler.ensurePeriodic(context)
-                NativeWorkScheduler.triggerImmediate(context)
-            }
+            NativeWorkScheduler.ensurePeriodic(context)
+            NativeWorkScheduler.triggerImmediate(context)
         } catch (e: Exception) {
             Log.e("SmsReceiver", "Failed in onReceive: ${e.message}", e)
+        } finally {
+            try {
+                pendingResult.finish()
+            } catch (_: Exception) {}
         }
     }
 
@@ -231,12 +240,16 @@ class SmsReceiver : BroadcastReceiver() {
         val prefs = context.getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
         val raw = prefs.getString("flutter.capture_rules_json", "[]") ?: "[]"
         val json = runCatching { JSONArray(raw) }.getOrElse { JSONArray() }
-        if (json.length() == 0) {
-            return false
-        }
-
         val lowerBody = body.lowercase()
         val lowerSender = sender.lowercase()
+
+        // Fallback: If capture rules have not yet synced from Flutter, do not discard SMS;
+        // safely match standard financial transactions
+        if (json.length() == 0) {
+            if (isSecurityOrOtp(lowerBody)) return false
+            if (isPromotionalOrSpam(lowerBody)) return false
+            return templateMatches("all", lowerSender, lowerBody)
+        }
 
         for (i in 0 until json.length()) {
             val rule = json.optJSONObject(i) ?: continue
@@ -279,6 +292,17 @@ class SmsReceiver : BroadcastReceiver() {
             }
 
             val type = rule.optString("type", "")
+            if (type == "custom_format") {
+                val format = rule.optString("customFormat", "")
+                if (format.isNotBlank() && CustomSmsFormatParser.matches(format, body)) {
+                    val senderPattern = rule.optString("senderPattern", "")
+                    if (senderPattern.isBlank() || Regex(senderPattern, RegexOption.IGNORE_CASE).containsMatchIn(sender)) {
+                        return true
+                    }
+                }
+                continue
+            }
+
             if (type == "template") {
                 val key = rule.optString("templateKey", "all")
                 if (templateMatches(key, lowerSender, lowerBody)) {
@@ -370,11 +394,23 @@ class SmsReceiver : BroadcastReceiver() {
 
     private fun templateMatches(key: String, lowerSender: String, lowerBody: String): Boolean {
         return when (key.lowercase()) {
-            "all" -> (lowerSender.contains("bkash") || lowerSender.contains("nagad") || lowerSender.contains("rocket") || lowerSender.contains("dbbl") || lowerSender.contains("bank") || lowerBody.contains("trxid") || lowerBody.contains("txnid") || lowerBody.contains("credited") || lowerBody.contains("balance"))
+            "all" -> (lowerSender.contains("bkash") || lowerSender.contains("nagad") || lowerSender.contains("rocket") ||
+                lowerSender.contains("dbbl") || lowerSender.contains("bank") || lowerSender.contains("upay") ||
+                lowerSender.contains("cellfin") || lowerSender.contains("mpesa") || lowerSender.contains("gcash") ||
+                lowerSender.contains("upi") || lowerBody.contains("trxid") || lowerBody.contains("txnid") ||
+                lowerBody.contains("credited") || lowerBody.contains("balance"))
             "bkash" -> lowerSender.contains("bkash") || lowerSender == "16247" || (lowerBody.contains("trxid") && lowerBody.contains("balance"))
             "nagad" -> lowerSender.contains("nagad") || lowerSender == "16167" || lowerBody.contains("nagad") || lowerBody.contains("txnid")
             "rocket" -> lowerSender.contains("rocket") || lowerSender == "16216" || lowerSender.contains("dbbl") || lowerBody.contains("rocket")
-            "bank" -> lowerSender.contains("bank") || lowerSender.contains("city") || lowerSender.contains("brac") || lowerSender.contains("ebl") || lowerSender.contains("dbbl") || lowerBody.contains("a/c") || lowerBody.contains("card ending")
+            "upay" -> lowerSender.contains("upay") || lowerBody.contains("upay")
+            "cellfin" -> lowerSender.contains("cellfin") || lowerBody.contains("cellfin") || lowerBody.contains("ibbl")
+            "mpesa" -> lowerSender.contains("mpesa") || lowerBody.contains("m-pesa") || lowerBody.contains("mpesa")
+            "gcash" -> lowerSender.contains("gcash") || lowerBody.contains("gcash")
+            "upi" -> lowerSender.contains("upi") || lowerBody.contains("upi") || lowerBody.contains("vpa")
+            "bank" -> lowerSender.contains("bank") || lowerSender.contains("city") || lowerSender.contains("brac") ||
+                lowerSender.contains("ebl") || lowerSender.contains("dbbl") || lowerSender.contains("scb") ||
+                lowerSender.contains("ibbl") || lowerSender.contains("ific") || lowerSender.contains("ucb") ||
+                lowerSender.contains("mtb") || lowerBody.contains("a/c") || lowerBody.contains("card ending")
             else -> false
         }
     }

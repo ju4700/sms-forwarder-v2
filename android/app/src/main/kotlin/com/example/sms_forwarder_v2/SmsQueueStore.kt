@@ -136,11 +136,12 @@ object SmsQueueStore {
         var retried = 0
         queue.forEach { item ->
             val status = item.optString("status", "pending")
-            if (status == "dead_letter" || status == "failed") {
-                item.put("status", "retry_scheduled")
-                item.put("nextRetryAt", now)
+            if (status != "delivered") {
+                item.put("status", "pending")
+                item.put("nextRetryAt", 0L)
+                item.put("attemptCount", 0)
                 item.put("lastError", "")
-                item.put("lastEvent", "Manual retry")
+                item.put("lastEvent", "Manual retry all")
                 item.put("forward", true)
                 retried += 1
             }
@@ -152,7 +153,6 @@ object SmsQueueStore {
     @Synchronized
     fun retrySingle(context: Context, sender: String, body: String, timestamp: Long): Boolean {
         val queue = readQueue(context)
-        val now = System.currentTimeMillis()
         var updated = false
         queue.forEach { item ->
             if (updated) {
@@ -161,9 +161,14 @@ object SmsQueueStore {
             val itemSender = item.optString("sender", "")
             val itemBody = item.optString("body", "")
             val itemTimestamp = item.optLong("timestamp", 0L)
-            if (itemSender == sender && itemBody == body && itemTimestamp == timestamp) {
-                item.put("status", "retry_scheduled")
-                item.put("nextRetryAt", now)
+
+            val senderMatches = itemSender.equals(sender, ignoreCase = true) || sender.isBlank() || itemSender.isBlank()
+            val contentMatches = itemBody == body && itemTimestamp == timestamp
+
+            if (contentMatches || (senderMatches && (itemTimestamp == timestamp || itemBody == body))) {
+                item.put("status", "pending")
+                item.put("nextRetryAt", 0L)
+                item.put("attemptCount", 0)
                 item.put("lastError", "")
                 item.put("lastEvent", "Manual retry")
                 item.put("forward", true)

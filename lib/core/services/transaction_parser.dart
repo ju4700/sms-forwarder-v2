@@ -228,7 +228,7 @@ class TransactionParser {
   static ParsedTransaction? _parseBkash(String body, String sender, String fallbackLocal, String fallbackUtc) {
     // Credit with Ref
     final RegExp p1 = RegExp(
-      r'(?:You\s+have\s+received|Received)\s+(?:Tk|BDT|৳)\s*([0-9,]+(?:\.[0-9]{1,2})?)\s+from\s+([0-9+]+)\.?\s*(?:Ref|Reference)\s*([^\.]+)\.?\s*Fee\s*(?:Tk|BDT|৳)\s*([0-9,]+(?:\.[0-9]{1,2})?)\.?\s*Balance\s*(?:Tk|BDT|৳)\s*([0-9,]+(?:\.[0-9]{1,2})?)\.?\s*(?:TrxID|Transaction\s*ID)\s+([A-Z0-9]+)\s+at\s+([0-9]{1,2}/[0-9]{1,2}/[0-9]{4}\s+[0-9]{1,2}:[0-9]{2})',
+      r'(?:You\s+have\s+received|Received|Payment\s+received)\s+(?:Tk|BDT|৳)\s*([0-9,]+(?:\.[0-9]{1,2})?)\s+from\s+([0-9+]+)\.?\s*(?:Ref|Reference)\s*([^\.]+)\.?\s*Fee\s*(?:Tk|BDT|৳)\s*([0-9,]+(?:\.[0-9]{1,2})?)\.?\s*Balance\s*(?:Tk|BDT|৳)\s*([0-9,]+(?:\.[0-9]{1,2})?)\.?\s*(?:TrxID|Transaction\s*ID)\s+([A-Z0-9]+)\s+at\s+([0-9]{1,2}/[0-9]{1,2}/[0-9]{4}\s+[0-9]{1,2}:[0-9]{2})',
       caseSensitive: false,
     );
     final Match? m1 = p1.firstMatch(body);
@@ -254,7 +254,7 @@ class TransactionParser {
 
     // Credit without Ref
     final RegExp p2 = RegExp(
-      r'(?:You\s+have\s+received|Received)\s+(?:Tk|BDT|৳)\s*([0-9,]+(?:\.[0-9]{1,2})?)\s+from\s+([0-9+]+)\.?\s*Fee\s*(?:Tk|BDT|৳)\s*([0-9,]+(?:\.[0-9]{1,2})?)\.?\s*Balance\s*(?:Tk|BDT|৳)\s*([0-9,]+(?:\.[0-9]{1,2})?)\.?\s*(?:TrxID|Transaction\s*ID)\s+([A-Z0-9]+)\s+at\s+([0-9]{1,2}/[0-9]{1,2}/[0-9]{4}\s+[0-9]{1,2}:[0-9]{2})',
+      r'(?:You\s+have\s+received|Received|Payment\s+received)\s+(?:Tk|BDT|৳)\s*([0-9,]+(?:\.[0-9]{1,2})?)\s+from\s+([0-9+]+)\.?\s*Fee\s*(?:Tk|BDT|৳)\s*([0-9,]+(?:\.[0-9]{1,2})?)\.?\s*Balance\s*(?:Tk|BDT|৳)\s*([0-9,]+(?:\.[0-9]{1,2})?)\.?\s*(?:TrxID|Transaction\s*ID)\s+([A-Z0-9]+)\s+at\s+([0-9]{1,2}/[0-9]{1,2}/[0-9]{4}\s+[0-9]{1,2}:[0-9]{2})',
       caseSensitive: false,
     );
     final Match? m2 = p2.firstMatch(body);

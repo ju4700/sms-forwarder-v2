@@ -92,6 +92,23 @@ class SmsCaptureService {
     }
   }
 
+  Future<bool> enqueueTestSms({
+    required String sender,
+    required String body,
+  }) async {
+    try {
+      return await _channel.invokeMethod<bool>('enqueueTestSms', <String, dynamic>{
+            'sender': sender,
+            'body': body,
+          }) ??
+          false;
+    } catch (e) {
+      // ignore: avoid_print
+      print('sms_capture_service: enqueueTestSms failed: $e');
+      return false;
+    }
+  }
+
   Future<bool> sendSms({
     required String address,
     required String body,

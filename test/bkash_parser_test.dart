@@ -42,6 +42,20 @@ void main() {
       expect(parsed.balance, 10458.97);
       expect(parsed.transactionId, '9K20ABC123');
     });
+
+    test('parses bKash Merchant Payment received SMS', () {
+      const String sms =
+          'Payment received Tk 850.00 from 01912345678. Ref INVOICE12. Fee Tk 0.00. Balance Tk 12,850.00. TrxID PMT987654 at 26/10/2026 15:30';
+
+      final ParsedTransaction parsed = TransactionParser.parse(sms, fallbackSender: 'bKash');
+      expect(parsed.provider, 'bkash');
+      expect(parsed.direction, 'credit');
+      expect(parsed.amount, 850.00);
+      expect(parsed.reference, 'INVOICE12');
+      expect(parsed.transactionId, 'PMT987654');
+      expect(parsed.sender, '01912345678');
+      expect(parsed.balance, 12850.00);
+    });
   });
 
   group('Nagad Parsing', () {

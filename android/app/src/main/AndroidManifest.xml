@@ -16,7 +16,8 @@
     <application
         android:label="SMS Forwarder"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:usesCleartextTraffic="true">
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -60,6 +61,7 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
+        <!-- Receiver for default SMS app (requires BROADCAST_SMS permission for SMS_DELIVER) -->
         <receiver
             android:name=".SmsReceiver"
             android:enabled="true"
@@ -67,7 +69,26 @@
             android:permission="android.permission.BROADCAST_SMS">
             <intent-filter android:priority="1000">
                 <action android:name="android.provider.Telephony.SMS_DELIVER" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Receiver for general incoming SMS broadcast -->
+        <receiver
+            android:name=".SmsReceivedReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter android:priority="1000">
                 <action android:name="android.provider.Telephony.SMS_RECEIVED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Debug receiver to enqueue test SMS via adb broadcast -->
+        <receiver
+            android:name=".DebugEnqueueReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.example.sms_forwarder_v2.DEBUG_ENQUEUE" />
             </intent-filter>
         </receiver>
 

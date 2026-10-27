@@ -41,13 +41,18 @@ class LogsScreen extends StatelessWidget {
                     final QueuedSms item = displayItems[index];
                     final bool isDelivered = item.status == 'delivered';
                     final bool isFailed = item.status == 'failed' || item.status == 'dead_letter';
+                    final bool isCaptured = item.status == 'captured';
 
                     final Color statusColor = isDelivered
                         ? Colors.green.shade800
-                        : (isFailed ? Colors.red.shade800 : Colors.blue.shade800);
+                        : (isFailed
+                            ? Colors.red.shade800
+                            : (isCaptured ? Colors.grey.shade800 : Colors.blue.shade800));
                     final Color statusBg = isDelivered
                         ? Colors.green.shade50
-                        : (isFailed ? Colors.red.shade50 : const Color(0xFFEAF6FF));
+                        : (isFailed
+                            ? Colors.red.shade50
+                            : (isCaptured ? Colors.grey.shade100 : const Color(0xFFEAF6FF)));
 
                     return Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),

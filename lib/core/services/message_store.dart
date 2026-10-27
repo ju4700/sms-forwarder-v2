@@ -301,7 +301,7 @@ class MessageStore extends _$MessageStore {
         type: 'template',
         templateKey: 'all',
         notes: jsonEncode(<String, dynamic>{
-          'direction': 'credit',
+          'direction': 'all',
           'minAmount': 0.0,
           'filterSpam': true,
           'filterOtp': true,
@@ -331,6 +331,8 @@ class MessageStore extends _$MessageStore {
         'minAmount': extra['minAmount'] ?? 0.0,
         'filterSpam': extra['filterSpam'] ?? true,
         'filterOtp': extra['filterOtp'] ?? true,
+        'customFormat': extra['customFormat'] ?? '',
+        'providerName': extra['providerName'] ?? '',
       };
     }).toList(growable: false);
 

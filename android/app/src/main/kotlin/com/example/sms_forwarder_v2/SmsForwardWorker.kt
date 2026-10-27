@@ -1,8 +1,13 @@
 package com.example.sms_forwarder_v2
 
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.content.Context
 import android.content.SharedPreferences
+import android.os.Build
 import android.util.Log
+import androidx.core.app.NotificationCompat
+import androidx.work.ForegroundInfo
 import androidx.work.Worker
 import androidx.work.WorkerParameters
 import org.json.JSONArray
@@ -26,6 +31,26 @@ class SmsForwardWorker(
 
     companion object {
         private val workLock = Any()
+    }
+
+    override fun getForegroundInfo(): ForegroundInfo {
+        val channelId = "sms_forwarder_worker_channel"
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                channelId,
+                "SMS Forwarding Delivery",
+                NotificationManager.IMPORTANCE_LOW
+            )
+            val nm = applicationContext.getSystemService(NotificationManager::class.java)
+            nm?.createNotificationChannel(channel)
+        }
+        val notification = NotificationCompat.Builder(applicationContext, channelId)
+            .setSmallIcon(android.R.drawable.stat_sys_upload)
+            .setContentTitle("SMS Forwarder")
+            .setContentText("Forwarding message to webhook...")
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .build()
+        return ForegroundInfo(1099, notification)
     }
 
     override fun doWork(): Result = synchronized(workLock) {
@@ -94,7 +119,7 @@ class SmsForwardWorker(
                     }
 
                     // Parse transaction details (multi-provider + resilient fallback)
-                    val parsed = parseTransaction(rawBody, sender)
+                    val parsed = parseTransaction(rawBody, sender, rulesJson)
                     val idempotencyKey = buildIdempotencyKey(parsed)
 
                     Log.d("SmsForwardWorker", "Sending ${parsed.provider} trx=${parsed.trxId} amt=${parsed.amount}")
@@ -109,12 +134,13 @@ class SmsForwardWorker(
                         lastEvent = "Sending ${parsed.trxId}",
                     )
 
-                    val sent = sendPayload(
+                    val sendResult = sendPayload(
                         endpoint = endpoint,
                         apiSecret = apiSecret,
                         idempotencyKey = idempotencyKey,
                         payload = parsed,
                     )
+                    val sent = sendResult.code
 
                     if (sent in 200..299) {
                         Log.i("SmsForwardWorker", "Delivered ${parsed.trxId} (HTTP $sent)")
@@ -127,15 +153,21 @@ class SmsForwardWorker(
                             attemptCount = attempts,
                             nextRetryAt = 0L,
                             lastEvent = "Delivered ${parsed.trxId} (HTTP $sent)",
+                            lastError = "",
                         )
                         deliveredCount++
                         return@forEach
                     }
 
                     val newAttempts = attempts + 1
+                    val errorDesc = when {
+                        sent > 0 -> "HTTP $sent: ${sendResult.responseBody?.take(60) ?: ""}".trim()
+                        !sendResult.error.isNullOrBlank() -> sendResult.error
+                        else -> "Network error"
+                    }
 
                     if (sent in 400..499 && !isRetryableHttpStatus(sent)) {
-                        Log.w("SmsForwardWorker", "Non-retryable HTTP $sent, dead-lettering")
+                        Log.w("SmsForwardWorker", "Non-retryable $errorDesc, dead-lettering")
                         SmsQueueStore.updateItem(
                             context = applicationContext,
                             sender = sender,
@@ -144,8 +176,8 @@ class SmsForwardWorker(
                             status = "failed",
                             attemptCount = newAttempts,
                             nextRetryAt = 0L,
-                            lastEvent = "Failed ${parsed.trxId} (HTTP $sent)",
-                            lastError = "Non-retryable HTTP $sent",
+                            lastEvent = "Failed ${parsed.trxId} ($errorDesc)",
+                            lastError = errorDesc,
                         )
                     } else if (newAttempts >= maxAttempts) {
                         Log.w("SmsForwardWorker", "Max attempts reached, dead-lettering")
@@ -157,8 +189,8 @@ class SmsForwardWorker(
                             status = "failed",
                             attemptCount = newAttempts,
                             nextRetryAt = 0L,
-                            lastEvent = "Failed ${parsed.trxId} after $newAttempts attempts (HTTP $sent)",
-                            lastError = "Max attempts reached (HTTP $sent)",
+                            lastEvent = "Failed ${parsed.trxId} after $newAttempts attempts ($errorDesc)",
+                            lastError = "Max attempts reached ($errorDesc)",
                         )
                     } else {
                         val retryAt = now + computeBackoffMs(newAttempts)
@@ -171,8 +203,8 @@ class SmsForwardWorker(
                             status = "retry_scheduled",
                             attemptCount = newAttempts,
                             nextRetryAt = retryAt,
-                            lastEvent = "Retry ${parsed.trxId} ($newAttempts/$maxAttempts) [HTTP $sent]",
-                            lastError = "HTTP $sent",
+                            lastEvent = "Retry ${parsed.trxId} ($newAttempts/$maxAttempts) [$errorDesc]",
+                            lastError = errorDesc,
                         )
                     }
                     processedCount++
@@ -200,18 +232,25 @@ class SmsForwardWorker(
         }
     }
 
+    data class SendResult(
+        val code: Int,
+        val error: String? = null,
+        val responseBody: String? = null,
+    )
+
     private fun sendPayload(
         endpoint: String,
         apiSecret: String,
         idempotencyKey: String,
         payload: ParsedResult,
-    ): Int {
+    ): SendResult {
         val jsonBody = JSONObject().apply {
             put("schemaVersion", "2.0")
             put("idempotencyKey", idempotencyKey)
             put("provider", payload.provider)
             put("direction", payload.direction)
             put("number", payload.sender)
+            put("sender", payload.sender)
             put("amount", payload.amount)
             put("fee", payload.fee)
             put("balance", payload.balance)
@@ -220,6 +259,7 @@ class SmsForwardWorker(
             put("datetimeLocal", payload.localIso)
             put("datetimeUtc", payload.utcIso)
             put("isParsed", payload.isParsed)
+            put("rawSms", payload.rawSms)
             if (payload.accountNumber.isNotBlank()) {
                 put("accountNumber", payload.accountNumber)
             }
@@ -230,8 +270,8 @@ class SmsForwardWorker(
         }
 
         val jsonString = jsonBody.toString()
-        val url = runCatching { URL(endpoint) }.getOrNull() ?: return 0
-        val connection = (url.openConnection() as? HttpURLConnection) ?: return 0
+        val url = runCatching { URL(endpoint) }.getOrNull() ?: return SendResult(0, "Invalid endpoint URL: $endpoint")
+        val connection = (url.openConnection() as? HttpURLConnection) ?: return SendResult(0, "Failed to open HTTP connection")
 
         return try {
             connection.requestMethod = "POST"
@@ -254,9 +294,14 @@ class SmsForwardWorker(
                 writer.flush()
             }
 
-            connection.responseCode
-        } catch (_: Exception) {
-            0
+            val code = connection.responseCode
+            val responseStream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val responseText = responseStream?.bufferedReader()?.use { it.readText() } ?: ""
+            Log.d("SmsForwardWorker", "Webhook HTTP $code response: $responseText")
+            SendResult(code = code, responseBody = responseText)
+        } catch (e: Exception) {
+            Log.e("SmsForwardWorker", "HTTP POST error: ${e.message}", e)
+            SendResult(code = 0, error = e.localizedMessage ?: e.javaClass.simpleName)
         } finally {
             connection.disconnect()
         }
@@ -305,10 +350,16 @@ class SmsForwardWorker(
 
     private fun ruleMatches(raw: String, sender: String, body: String): Boolean {
         val json = runCatching { JSONArray(raw) }.getOrElse { JSONArray() }
-        if (json.length() == 0) return false
-
         val lowerBody = body.lowercase()
         val lowerSender = sender.lowercase()
+
+        // Fallback: If capture rules have not yet synced from Flutter, do not discard SMS;
+        // safely match standard financial transactions
+        if (json.length() == 0) {
+            if (isSecurityOrOtp(lowerBody)) return false
+            if (isPromotionalOrSpam(lowerBody)) return false
+            return templateMatches("all", lowerSender, lowerBody)
+        }
 
         for (i in 0 until json.length()) {
             val rule = json.optJSONObject(i) ?: continue
@@ -334,6 +385,17 @@ class SmsForwardWorker(
             }
 
             val type = rule.optString("type", "")
+            if (type == "custom_format") {
+                val format = rule.optString("customFormat", "")
+                if (format.isNotBlank() && CustomSmsFormatParser.matches(format, body)) {
+                    val senderPattern = rule.optString("senderPattern", "")
+                    if (senderPattern.isBlank() || Regex(senderPattern, RegexOption.IGNORE_CASE).containsMatchIn(sender)) {
+                        return true
+                    }
+                }
+                continue
+            }
+
             if (type == "template") {
                 val key = rule.optString("templateKey", "all")
                 if (templateMatches(key, lowerSender, lowerBody)) return true
@@ -415,11 +477,23 @@ class SmsForwardWorker(
 
     private fun templateMatches(key: String, lowerSender: String, lowerBody: String): Boolean {
         return when (key.lowercase()) {
-            "all" -> (lowerSender.contains("bkash") || lowerSender.contains("nagad") || lowerSender.contains("rocket") || lowerSender.contains("dbbl") || lowerSender.contains("bank") || lowerBody.contains("trxid") || lowerBody.contains("txnid") || lowerBody.contains("credited") || lowerBody.contains("balance"))
+            "all" -> (lowerSender.contains("bkash") || lowerSender.contains("nagad") || lowerSender.contains("rocket") ||
+                lowerSender.contains("dbbl") || lowerSender.contains("bank") || lowerSender.contains("upay") ||
+                lowerSender.contains("cellfin") || lowerSender.contains("mpesa") || lowerSender.contains("gcash") ||
+                lowerSender.contains("upi") || lowerBody.contains("trxid") || lowerBody.contains("txnid") ||
+                lowerBody.contains("credited") || lowerBody.contains("balance"))
             "bkash" -> lowerSender.contains("bkash") || lowerSender == "16247" || (lowerBody.contains("trxid") && lowerBody.contains("balance"))
             "nagad" -> lowerSender.contains("nagad") || lowerSender == "16167" || lowerBody.contains("nagad") || lowerBody.contains("txnid")
             "rocket" -> lowerSender.contains("rocket") || lowerSender == "16216" || lowerSender.contains("dbbl") || lowerBody.contains("rocket")
-            "bank" -> lowerSender.contains("bank") || lowerSender.contains("city") || lowerSender.contains("brac") || lowerSender.contains("ebl") || lowerSender.contains("dbbl") || lowerBody.contains("a/c") || lowerBody.contains("card ending")
+            "upay" -> lowerSender.contains("upay") || lowerBody.contains("upay")
+            "cellfin" -> lowerSender.contains("cellfin") || lowerBody.contains("cellfin") || lowerBody.contains("ibbl")
+            "mpesa" -> lowerSender.contains("mpesa") || lowerBody.contains("m-pesa") || lowerBody.contains("mpesa")
+            "gcash" -> lowerSender.contains("gcash") || lowerBody.contains("gcash")
+            "upi" -> lowerSender.contains("upi") || lowerBody.contains("upi") || lowerBody.contains("vpa")
+            "bank" -> lowerSender.contains("bank") || lowerSender.contains("city") || lowerSender.contains("brac") ||
+                lowerSender.contains("ebl") || lowerSender.contains("dbbl") || lowerSender.contains("scb") ||
+                lowerSender.contains("ibbl") || lowerSender.contains("ific") || lowerSender.contains("ucb") ||
+                lowerSender.contains("mtb") || lowerBody.contains("a/c") || lowerBody.contains("card ending")
             else -> false
         }
     }
@@ -444,11 +518,54 @@ class SmsForwardWorker(
         val isParsed: Boolean,
     )
 
-    private fun parseTransaction(rawBody: String, sender: String): ParsedResult {
+    private fun parseTransaction(rawBody: String, sender: String, rulesJson: String = "[]"): ParsedResult {
         val normalized = normalizeBengaliDigits(rawBody).trim()
         val now = Date()
         val defaultLocal = toLocalIso(now)
         val defaultUtc = toUtcIso(now)
+
+        // 0. Check custom format rules first (allows foreigners / global formats to take precedence)
+        val jsonRules = runCatching { JSONArray(rulesJson) }.getOrNull()
+        if (jsonRules != null) {
+            for (i in 0 until jsonRules.length()) {
+                val rule = jsonRules.optJSONObject(i) ?: continue
+                if (!rule.optBoolean("enabled", true)) continue
+                if (rule.optString("type") == "custom_format") {
+                    val template = rule.optString("customFormat", "")
+                    if (template.isNotBlank()) {
+                        val customMatch = CustomSmsFormatParser.parse(template, normalized)
+                        if (customMatch.isMatched) {
+                            val provider = rule.optString("providerName", "custom").ifBlank { "custom" }
+                            val direction = rule.optString("direction", "credit").ifBlank { detectDirection(normalized.lowercase()) }
+                            val amt = customMatch.amount ?: 0.0
+                            val trxId = customMatch.trxId ?: "CUST_${System.currentTimeMillis()}"
+                            val snd = customMatch.sender ?: sender.ifEmpty { "CUSTOM" }
+                            val bal = customMatch.balance ?: 0.0
+                            val fee = customMatch.fee ?: 0.0
+                            val acc = customMatch.account.orEmpty()
+                            val local = customMatch.date?.let { parseDateToLocal(it) } ?: defaultLocal
+                            val utc = customMatch.date?.let { parseDateToUtc(it) } ?: defaultUtc
+
+                            return ParsedResult(
+                                provider = provider,
+                                direction = direction,
+                                amount = amt,
+                                fee = fee,
+                                balance = bal,
+                                trxId = trxId,
+                                reference = "CUSTOM_SMS",
+                                sender = snd,
+                                accountNumber = acc,
+                                localIso = local,
+                                utcIso = utc,
+                                rawSms = rawBody,
+                                isParsed = amt > 0,
+                            )
+                        }
+                    }
+                }
+            }
+        }
 
         // 1. Try bKash parsing
         val bkash = tryParseBkash(normalized, sender, defaultLocal, defaultUtc)
@@ -462,17 +579,25 @@ class SmsForwardWorker(
         val rocket = tryParseRocket(normalized, sender, defaultLocal, defaultUtc)
         if (rocket != null) return rocket
 
-        // 4. Try Commercial Bank parsing
+        // 4. Try Upay parsing
+        val upay = tryParseUpay(normalized, sender, defaultLocal, defaultUtc)
+        if (upay != null) return upay
+
+        // 5. Try CellFin / IBBL parsing
+        val cellfin = tryParseCellFin(normalized, sender, defaultLocal, defaultUtc)
+        if (cellfin != null) return cellfin
+
+        // 6. Try Commercial Bank parsing
         val bank = tryParseBank(normalized, sender, defaultLocal, defaultUtc)
         if (bank != null) return bank
 
-        // 5. Resilient Generic Fallback (NEVER drops matching SMS)
+        // 7. Resilient Generic Fallback (NEVER drops matching SMS)
         return parseGenericFallback(normalized, sender, defaultLocal, defaultUtc)
     }
 
     private fun tryParseBkash(body: String, sender: String, defaultLocal: String, defaultUtc: String): ParsedResult? {
         val p1 = Regex(
-            """(?i)(?:You\s+have\s+received|Received)\s+(?:Tk|BDT|৳)\s*([0-9,]+(?:\.[0-9]{1,2})?)\s+from\s+([0-9+]+)\.?\s*(?:Ref|Reference)\s*([^.]+)\.?\s*Fee\s*(?:Tk|BDT|৳)\s*([0-9,]+(?:\.[0-9]{1,2})?)\.?\s*Balance\s*(?:Tk|BDT|৳)\s*([0-9,]+(?:\.[0-9]{1,2})?)\.?\s*(?:TrxID|Transaction\s*ID)\s+([A-Z0-9]+)\s+at\s+([0-9]{1,2}/[0-9]{1,2}/[0-9]{4}\s+[0-9]{1,2}:[0-9]{2})"""
+            """(?i)(?:You\s+have\s+received|Received|Payment\s+received)\s+(?:Tk|BDT|৳)\s*([0-9,]+(?:\.[0-9]{1,2})?)\s+from\s+([0-9+]+)\.?\s*(?:Ref|Reference)\s*([^.]+)\.?\s*Fee\s*(?:Tk|BDT|৳)\s*([0-9,]+(?:\.[0-9]{1,2})?)\.?\s*Balance\s*(?:Tk|BDT|৳)\s*([0-9,]+(?:\.[0-9]{1,2})?)\.?\s*(?:TrxID|Transaction\s*ID)\s+([A-Z0-9]+)\s+at\s+([0-9]{1,2}/[0-9]{1,2}/[0-9]{4}\s+[0-9]{1,2}:[0-9]{2})"""
         )
         val m1 = p1.find(body)
         if (m1 != null) {
@@ -496,7 +621,7 @@ class SmsForwardWorker(
         }
 
         val p2 = Regex(
-            """(?i)(?:You\s+have\s+received|Received)\s+(?:Tk|BDT|৳)\s*([0-9,]+(?:\.[0-9]{1,2})?)\s+from\s+([0-9+]+)\.?\s*Fee\s*(?:Tk|BDT|৳)\s*([0-9,]+(?:\.[0-9]{1,2})?)\.?\s*Balance\s*(?:Tk|BDT|৳)\s*([0-9,]+(?:\.[0-9]{1,2})?)\.?\s*(?:TrxID|Transaction\s*ID)\s+([A-Z0-9]+)\s+at\s+([0-9]{1,2}/[0-9]{1,2}/[0-9]{4}\s+[0-9]{1,2}:[0-9]{2})"""
+            """(?i)(?:You\s+have\s+received|Received|Payment\s+received)\s+(?:Tk|BDT|৳)\s*([0-9,]+(?:\.[0-9]{1,2})?)\s+from\s+([0-9+]+)\.?\s*Fee\s*(?:Tk|BDT|৳)\s*([0-9,]+(?:\.[0-9]{1,2})?)\.?\s*Balance\s*(?:Tk|BDT|৳)\s*([0-9,]+(?:\.[0-9]{1,2})?)\.?\s*(?:TrxID|Transaction\s*ID)\s+([A-Z0-9]+)\s+at\s+([0-9]{1,2}/[0-9]{1,2}/[0-9]{4}\s+[0-9]{1,2}:[0-9]{2})"""
         )
         val m2 = p2.find(body)
         if (m2 != null) {
@@ -626,11 +751,84 @@ class SmsForwardWorker(
         return null
     }
 
+    private fun tryParseUpay(body: String, sender: String, defaultLocal: String, defaultUtc: String): ParsedResult? {
+        val p = Regex(
+            """(?i)(?:Cash\s+In|Received|Payment)\s+of\s+(?:Tk|BDT|৳)?\.?\s*([0-9,]+(?:\.[0-9]{1,2})?)\s+from\s+([0-9+-]+)\s+successful\.?\s*(?:Fee:?\s*(?:Tk|BDT|৳)?\.?\s*([0-9,]+(?:\.[0-9]{1,2})?))?\.?\s*(?:Balance:?\s*(?:Tk|BDT|৳)?\.?\s*([0-9,]+(?:\.[0-9]{1,2})?))?\.?\s*(?:TrxID|TxnID):?\s*([A-Z0-9]+)"""
+        )
+        val m = p.find(body)
+        if (m != null) {
+            val amt = cleanAmount(m.groupValues[1]) ?: return null
+            return ParsedResult(
+                provider = "upay",
+                direction = "credit",
+                amount = amt,
+                sender = normalizePhone(m.groupValues[2]),
+                reference = "UPAY_CASH_IN",
+                fee = cleanAmount(m.groupValues.getOrNull(3)) ?: 0.0,
+                balance = cleanAmount(m.groupValues.getOrNull(4)) ?: 0.0,
+                trxId = m.groupValues[5].trim().uppercase(),
+                accountNumber = "",
+                localIso = defaultLocal,
+                utcIso = defaultUtc,
+                rawSms = body,
+                isParsed = true,
+            )
+        }
+        return null
+    }
+
+    private fun tryParseCellFin(body: String, sender: String, defaultLocal: String, defaultUtc: String): ParsedResult? {
+        val p = Regex(
+            """(?i)(?:CellFin:?\s*)?(?:Your\s+A/C\s+has\s+been\s+credited\s+with|Credited\s+with)\s+(?:Tk|BDT|৳)?\.?\s*([0-9,]+(?:\.[0-9]{1,2})?)\s*(?:via\s+([^.]+?))?\.?\s*(?:Avail(?:able)?\s*Bal(?:ance)?:?|Total\s*Bal:?)\s*(?:Tk|BDT|৳)?\.?\s*([0-9,]+(?:\.[0-9]{1,2})?)\.?\s*(?:TrxID|TxnID):?\s*([A-Z0-9]+)"""
+        )
+        val m = p.find(body)
+        if (m != null) {
+            val amt = cleanAmount(m.groupValues[1]) ?: return null
+            return ParsedResult(
+                provider = "cellfin",
+                direction = "credit",
+                amount = amt,
+                sender = sender.ifEmpty { "CELLFIN" },
+                reference = cleanReference(m.groupValues.getOrNull(2)?.ifEmpty { "CELLFIN_TRANSFER" } ?: "CELLFIN_TRANSFER"),
+                fee = 0.0,
+                balance = cleanAmount(m.groupValues.getOrNull(3)) ?: 0.0,
+                trxId = m.groupValues[4].trim().uppercase(),
+                accountNumber = "",
+                localIso = defaultLocal,
+                utcIso = defaultUtc,
+                rawSms = body,
+                isParsed = true,
+            )
+        }
+        return null
+    }
+
+    private fun detectProvider(sender: String, body: String): String {
+        val s = sender.lowercase()
+        val b = body.lowercase()
+
+        return when {
+            s.contains("bkash") || s == "16247" || b.contains("bkash") -> "bkash"
+            s.contains("nagad") || s == "16167" || b.contains("nagad") -> "nagad"
+            s.contains("rocket") || s == "16216" || b.contains("rocket") || s == "dbbl" -> "rocket"
+            s.contains("upay") || b.contains("upay") -> "upay"
+            s.contains("cellfin") || b.contains("cellfin") -> "cellfin"
+            s.contains("mpesa") || b.contains("m-pesa") || b.contains("mpesa") -> "mpesa"
+            s.contains("gcash") || b.contains("gcash") -> "gcash"
+            s.contains("upi") || b.contains("upi") -> "upi"
+            s.contains("chase") || b.contains("chase") -> "chase"
+            s.contains("bank") || s.contains("city") || s.contains("brac") || s.contains("ebl") ||
+                s.contains("scb") || s.contains("ibbl") || s.contains("ific") || s.contains("ucb") ||
+                s.contains("mtb") || b.contains("a/c") || b.contains("card ending") -> "bank"
+            else -> "generic"
+        }
+    }
+
     private fun parseGenericFallback(body: String, sender: String, defaultLocal: String, defaultUtc: String): ParsedResult {
-        val amtRegex = Regex("""(?i)(?:Tk|BDT|৳)\.?\s*([0-9,]+(?:\.[0-9]{1,2})?)""")
-        val trxRegex = Regex("""(?i)(?:TrxID|TxnID|Txn\s*ID|Transaction\s*ID|Ref\s*ID)[\s:]*([A-Z0-9]+)""")
-        val balRegex = Regex("""(?i)(?:Bal|Balance|Avail(?:able)?\s*Bal(?:ance)?|Total\s*Bal)[\s:]*(?:Tk|BDT|৳)?\.?\s*([0-9,]+(?:\.[0-9]{1,2})?)""")
-        val feeRegex = Regex("""(?i)Fee[\s:]*(?:Tk|BDT|৳)?\.?\s*([0-9,]+(?:\.[0-9]{1,2})?)""")
+        val amtRegex = Regex("""(?i)(?:Tk|BDT|৳|Ksh|PHP|Rs|\$|€|£)\.?\s*([0-9,]+(?:\.[0-9]{1,2})?)""")
+        val trxRegex = Regex("""(?i)(?:TrxID|TxnID|Txn\s*ID|Transaction\s*ID|Ref\s*ID|Ref\.?\s*No\.?|Confirmation)[\s:]*([A-Z0-9]+)""")
+        val balRegex = Regex("""(?i)(?:Bal|Balance|Avail(?:able)?\s*Bal(?:ance)?|Total\s*Bal)[\s:]*(?:Tk|BDT|৳|Ksh|PHP|Rs|\$|€|£)?\.?\s*([0-9,]+(?:\.[0-9]{1,2})?)""")
+        val feeRegex = Regex("""(?i)(?:Fee|Transaction\s*cost)[\s:]*(?:Tk|BDT|৳|Ksh|PHP|Rs|\$|€|£)?\.?\s*([0-9,]+(?:\.[0-9]{1,2})?)""")
 
         val amtMatch = amtRegex.find(body)
         val trxMatch = trxRegex.find(body)
@@ -643,7 +841,7 @@ class SmsForwardWorker(
         val fee = cleanAmount(feeMatch?.groupValues?.getOrNull(1)) ?: 0.0
 
         return ParsedResult(
-            provider = "generic",
+            provider = detectProvider(sender, body),
             direction = detectDirection(body.lowercase()),
             amount = amount,
             trxId = trxId,

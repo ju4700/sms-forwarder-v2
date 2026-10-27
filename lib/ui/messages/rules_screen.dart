@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../../core/app_controller.dart';
+import '../../core/services/custom_format_parser.dart';
 import '../../core/services/message_store.dart';
 
 class RulesScreen extends StatelessWidget {
@@ -68,7 +69,7 @@ class RulesScreen extends StatelessWidget {
           ),
           const SizedBox(height: 6),
           Text(
-            'Rules filter which SMS are forwarded to your webhook. Automatic protection blocks OTPs and promotional spam.',
+            'Rules filter which SMS are forwarded to your webhook. Supports Bangladeshi MFS & Banks, international formats (M-Pesa, GCash, UPI, Chase), and custom placeholder templates. Protects against OTPs and promotional spam.',
             style: GoogleFonts.spaceGrotesk(color: _ink.withValues(alpha: 0.7)),
           ),
         ],
@@ -86,7 +87,7 @@ class RulesScreen extends StatelessWidget {
         color: Colors.white,
       ),
       child: Text(
-        'No rules yet. Add one to start forwarding MFS or bank transactions.',
+        'No rules yet. Add one to start forwarding MFS, bank transactions, or international SMS.',
         textAlign: TextAlign.center,
         style: GoogleFonts.spaceGrotesk(color: _ink),
       ),
@@ -168,7 +169,12 @@ class RulesScreen extends StatelessWidget {
     final List<String> parts = <String>[];
     if (rule.type == 'template' && rule.templateKey != null) {
       parts.add('Provider: ${rule.templateKey!.toUpperCase()}');
+    } else if (rule.type == 'custom_format') {
+      parts.add('Custom Format');
+    } else if (rule.type == 'regex') {
+      parts.add('Regex Filter');
     }
+
     if (rule.senderPattern != null && rule.senderPattern!.isNotEmpty) {
       parts.add('Sender: ${rule.senderPattern}');
     }
@@ -179,10 +185,18 @@ class RulesScreen extends StatelessWidget {
     if (rule.notes != null && rule.notes!.isNotEmpty) {
       try {
         final Map<String, dynamic> notes = jsonDecode(rule.notes!) as Map<String, dynamic>;
+        final String? providerName = notes['providerName'] as String?;
+        if (providerName != null && providerName.isNotEmpty && rule.type == 'custom_format') {
+          parts.add('Provider: ${providerName.toUpperCase()}');
+        }
         final String direction = notes['direction']?.toString() ?? 'credit';
         parts.add(direction == 'credit' ? 'Money In Only' : (direction == 'debit' ? 'Money Out Only' : 'All'));
         final double min = (notes['minAmount'] as num?)?.toDouble() ?? 0.0;
-        if (min > 0) parts.add('Min: BDT $min');
+        if (min > 0) parts.add('Min: $min');
+        final String? customFormat = notes['customFormat'] as String?;
+        if (customFormat != null && customFormat.isNotEmpty) {
+          parts.add('Pattern: ${customFormat.length > 35 ? "${customFormat.substring(0, 32)}..." : customFormat}');
+        }
       } catch (_) {}
     }
 
@@ -194,21 +208,28 @@ class RulesScreen extends StatelessWidget {
     final TextEditingController senderController = TextEditingController(text: rule?.senderPattern ?? '');
     final TextEditingController bodyController = TextEditingController(text: rule?.bodyPattern ?? '');
     final TextEditingController minAmountController = TextEditingController();
+    final TextEditingController customFormatController = TextEditingController();
+    final TextEditingController providerNameController = TextEditingController();
+    final TextEditingController sampleTestController = TextEditingController();
 
     String type = rule?.type ?? 'template';
     String templateKey = rule?.templateKey ?? 'all';
-    String direction = 'credit';
+    String direction = 'all';
+    String selectedPresetId = 'custom';
     bool filterSpam = true;
     bool filterOtp = true;
+    Map<String, dynamic>? testResult;
 
     if (rule?.notes != null && rule!.notes!.isNotEmpty) {
       try {
         final Map<String, dynamic> extra = jsonDecode(rule.notes!) as Map<String, dynamic>;
-        direction = extra['direction']?.toString() ?? 'credit';
+        direction = extra['direction']?.toString() ?? 'all';
         final double? min = (extra['minAmount'] as num?)?.toDouble();
         if (min != null && min > 0) minAmountController.text = min.toStringAsFixed(0);
         filterSpam = extra['filterSpam'] as bool? ?? true;
         filterOtp = extra['filterOtp'] as bool? ?? true;
+        customFormatController.text = (extra['customFormat'] as String? ?? '').trim();
+        providerNameController.text = (extra['providerName'] as String? ?? '').trim();
       } catch (_) {}
     }
 
@@ -239,7 +260,7 @@ class RulesScreen extends StatelessWidget {
                       controller: nameController,
                       decoration: const InputDecoration(
                         labelText: 'Rule Name',
-                        hintText: 'e.g. bKash Merchant Payments',
+                        hintText: 'e.g. bKash Merchant Payments or M-Pesa Alerts',
                         border: OutlineInputBorder(),
                       ),
                     ),
@@ -252,6 +273,10 @@ class RulesScreen extends StatelessWidget {
                       ),
                       items: const <DropdownMenuItem<String>>[
                         DropdownMenuItem(value: 'template', child: Text('Pre-configured Template')),
+                        DropdownMenuItem(
+                          value: 'custom_format',
+                          child: Text('Custom SMS Format (Foreign / Placeholder)'),
+                        ),
                         DropdownMenuItem(value: 'regex', child: Text('Custom Regex Pattern')),
                       ],
                       onChanged: (String? value) {
@@ -269,11 +294,19 @@ class RulesScreen extends StatelessWidget {
                           border: OutlineInputBorder(),
                         ),
                         items: const <DropdownMenuItem<String>>[
-                          DropdownMenuItem(value: 'all', child: Text('All Providers (bKash, Nagad, Rocket, Banks)')),
+                          DropdownMenuItem(
+                            value: 'all',
+                            child: Text('All Providers (bKash, Nagad, Rocket, Upay, Banks)'),
+                          ),
                           DropdownMenuItem(value: 'bkash', child: Text('bKash Only')),
                           DropdownMenuItem(value: 'nagad', child: Text('Nagad Only')),
                           DropdownMenuItem(value: 'rocket', child: Text('Rocket Only')),
-                          DropdownMenuItem(value: 'bank', child: Text('Commercial Banks (City, DBBL, BRAC, etc.)')),
+                          DropdownMenuItem(value: 'upay', child: Text('Upay Only')),
+                          DropdownMenuItem(value: 'cellfin', child: Text('CellFin / IBBL Only')),
+                          DropdownMenuItem(
+                            value: 'bank',
+                            child: Text('Commercial Banks (City, DBBL, BRAC, EBL, etc.)'),
+                          ),
                         ],
                         onChanged: (String? value) {
                           if (value != null) {
@@ -281,6 +314,172 @@ class RulesScreen extends StatelessWidget {
                           }
                         },
                       ),
+                    if (type == 'custom_format') ...<Widget>[
+                      DropdownButtonFormField<String>(
+                        initialValue: selectedPresetId,
+                        decoration: const InputDecoration(
+                          labelText: 'Quick Preset (Auto-populate template)',
+                          border: OutlineInputBorder(),
+                        ),
+                        items: <DropdownMenuItem<String>>[
+                          const DropdownMenuItem<String>(
+                            value: 'custom',
+                            child: Text('Custom Template (Blank)'),
+                          ),
+                          ...CustomSmsFormatParser.presets.map(
+                            (CustomFormatPreset p) => DropdownMenuItem<String>(
+                              value: p.id,
+                              child: Text(p.name),
+                            ),
+                          ),
+                        ],
+                        onChanged: (String? val) {
+                          if (val == null) return;
+                          selectedPresetId = val;
+                          if (val != 'custom') {
+                            final CustomFormatPreset preset =
+                                CustomSmsFormatParser.presets.firstWhere((CustomFormatPreset p) => p.id == val);
+                            customFormatController.text = preset.format;
+                            providerNameController.text = preset.provider;
+                            sampleTestController.text = preset.sampleSms;
+                            direction = preset.direction;
+                            if (nameController.text.trim().isEmpty) {
+                              nameController.text = preset.name;
+                            }
+                          }
+                          setModalState(() {
+                            testResult = null;
+                          });
+                        },
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: providerNameController,
+                        decoration: const InputDecoration(
+                          labelText: 'Provider Name',
+                          hintText: 'e.g. mpesa, gcash, upi, chase, cellfin',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: customFormatController,
+                        maxLines: 3,
+                        decoration: const InputDecoration(
+                          labelText: 'Format Template with Placeholders',
+                          hintText:
+                              '{trxId} Confirmed. Ksh{amount} received from {sender} on {date}. New balance is {balance}',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Tap placeholder chips to insert into template:',
+                        style: GoogleFonts.spaceGrotesk(fontSize: 12, fontWeight: FontWeight.w600),
+                      ),
+                      const SizedBox(height: 6),
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 4,
+                        children: <String>[
+                          '{amount}',
+                          '{trxId}',
+                          '{sender}',
+                          '{balance}',
+                          '{fee}',
+                          '{account}',
+                          '{date}',
+                          '{any}',
+                        ].map((String tag) {
+                          return ActionChip(
+                            label: Text(tag, style: const TextStyle(fontSize: 11.5)),
+                            backgroundColor: const Color(0xFFF0F7FF),
+                            onPressed: () {
+                              final String current = customFormatController.text;
+                              setModalState(() {
+                                customFormatController.text = current.isEmpty ? tag : '$current $tag';
+                              });
+                            },
+                          );
+                        }).toList(growable: false),
+                      ),
+                      const SizedBox(height: 14),
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF9FBFF),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: _cardBorder),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: <Widget>[
+                            Text(
+                              'Test Template Pattern',
+                              style: GoogleFonts.spaceGrotesk(
+                                fontWeight: FontWeight.w700,
+                                fontSize: 13,
+                                color: _ink,
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            TextField(
+                              controller: sampleTestController,
+                              maxLines: 2,
+                              decoration: const InputDecoration(
+                                labelText: 'Sample SMS Body',
+                                hintText: 'Paste a real SMS here to verify template match',
+                                border: OutlineInputBorder(),
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            OutlinedButton.icon(
+                              onPressed: () {
+                                final Map<String, dynamic> res = CustomSmsFormatParser.testTemplate(
+                                  customFormatController.text,
+                                  sampleTestController.text,
+                                );
+                                setModalState(() {
+                                  testResult = res;
+                                });
+                              },
+                              icon: const Icon(Icons.play_arrow_outlined, size: 16),
+                              label: const Text('Test Pattern'),
+                            ),
+                            if (testResult != null) ...<Widget>[
+                              const SizedBox(height: 8),
+                              Container(
+                                width: double.infinity,
+                                padding: const EdgeInsets.all(10),
+                                decoration: BoxDecoration(
+                                  color: testResult!['success'] == true
+                                      ? const Color(0xFFE8F5E9)
+                                      : const Color(0xFFFFEBEE),
+                                  borderRadius: BorderRadius.circular(6),
+                                  border: Border.all(
+                                    color: testResult!['success'] == true
+                                        ? Colors.green.shade300
+                                        : Colors.red.shade300,
+                                  ),
+                                ),
+                                child: Text(
+                                  testResult!['success'] == true
+                                      ? 'Match successful!\n${const JsonEncoder.withIndent("  ").convert(testResult!["extracted"])}'
+                                      : 'Test failed: ${testResult!["error"]}',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontFamily: 'monospace',
+                                    color: testResult!['success'] == true
+                                        ? Colors.green.shade900
+                                        : Colors.red.shade900,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ],
                     if (type == 'regex') ...<Widget>[
                       TextField(
                         controller: senderController,
@@ -308,9 +507,9 @@ class RulesScreen extends StatelessWidget {
                         border: OutlineInputBorder(),
                       ),
                       items: const <DropdownMenuItem<String>>[
-                        DropdownMenuItem(value: 'credit', child: Text('Money In / Received (Credit only - Recommended)')),
+                        DropdownMenuItem(value: 'all', child: Text('Both (Credit and Debit - Recommended)')),
+                        DropdownMenuItem(value: 'credit', child: Text('Money In / Received (Credit only)')),
                         DropdownMenuItem(value: 'debit', child: Text('Money Out / Sent (Debit only)')),
-                        DropdownMenuItem(value: 'all', child: Text('Both (Credit and Debit)')),
                       ],
                       onChanged: (String? value) {
                         if (value != null) {
@@ -323,7 +522,7 @@ class RulesScreen extends StatelessWidget {
                       controller: minAmountController,
                       keyboardType: TextInputType.number,
                       decoration: const InputDecoration(
-                        labelText: 'Minimum Amount (BDT) (Optional)',
+                        labelText: 'Minimum Amount (Optional)',
                         hintText: 'e.g. 50 (Ignores transactions below this)',
                         border: OutlineInputBorder(),
                       ),
@@ -374,7 +573,9 @@ class RulesScreen extends StatelessWidget {
 
     final String? senderPattern = type == 'regex' ? senderController.text.trim() : null;
     final String? bodyPattern = type == 'regex' ? bodyController.text.trim() : null;
-    final String? template = type == 'template' ? templateKey : null;
+    final String? template = type == 'template'
+        ? templateKey
+        : (type == 'custom_format' ? providerNameController.text.trim().toLowerCase() : null);
 
     final double? minAmount = double.tryParse(minAmountController.text.trim());
     final Map<String, dynamic> notesMap = <String, dynamic>{
@@ -382,6 +583,10 @@ class RulesScreen extends StatelessWidget {
       'minAmount': minAmount ?? 0.0,
       'filterSpam': filterSpam,
       'filterOtp': filterOtp,
+      if (type == 'custom_format') ...<String, dynamic>{
+        'customFormat': customFormatController.text.trim(),
+        'providerName': providerNameController.text.trim().toLowerCase(),
+      },
     };
     final String notesJson = jsonEncode(notesMap);
 

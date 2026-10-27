@@ -18,6 +18,7 @@ class _HomeScreenState extends State<HomeScreen> {
   static const Color _electricBlue = Color(0xFF009BFF);
   static const Color _cardBorder = Color(0xFFD8ECFF);
   bool _retrying = false;
+  bool _testingWebhook = false;
   final Set<String> _retryingItems = <String>{};
   int _retryCooldownUntil = 0;
 
@@ -154,15 +155,43 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ),
           const SizedBox(height: 10),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              onPressed: () => controller.saveSettings(
-                endpoint: _endpointController.text,
-                secret: _secretController.text,
+          Row(
+            children: <Widget>[
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: () async {
+                    await controller.saveSettings(
+                      endpoint: _endpointController.text,
+                      secret: _secretController.text,
+                    );
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Webhook settings saved & synced to background service.'),
+                          duration: Duration(seconds: 2),
+                        ),
+                      );
+                    }
+                  },
+                  icon: const Icon(Icons.save_outlined),
+                  label: const Text('Save Settings'),
+                ),
               ),
-              child: const Text('Save Settings'),
-            ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: _testingWebhook ? null : () => _runWebhookTest(controller),
+                  icon: _testingWebhook
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.send_outlined),
+                  label: const Text('Test Webhook'),
+                ),
+              ),
+            ],
           ),
           const SizedBox(height: 8),
           SwitchListTile(
@@ -276,14 +305,20 @@ class _HomeScreenState extends State<HomeScreen> {
           final QueuedSms item = displayItems[index];
           final bool isFailed = item.status == 'failed' || item.status == 'dead_letter';
           final bool isPending = item.status == 'pending' || item.status == 'retry_scheduled';
+          final bool isCaptured = item.status == 'captured';
+          final bool canRetry = isFailed || isPending || isCaptured;
           final bool isRetrying = _retryingItems.contains(item.id);
 
           final Color statusColor = item.status == 'delivered'
               ? Colors.green.shade800
-              : (isFailed ? Colors.red.shade800 : Colors.blue.shade800);
+              : (isFailed
+                  ? Colors.red.shade800
+                  : (isCaptured ? Colors.grey.shade800 : Colors.blue.shade800));
           final Color statusBg = item.status == 'delivered'
               ? Colors.green.shade50
-              : (isFailed ? Colors.red.shade50 : const Color(0xFFEAF6FF));
+              : (isFailed
+                  ? Colors.red.shade50
+                  : (isCaptured ? Colors.grey.shade100 : const Color(0xFFEAF6FF)));
 
           return Padding(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
@@ -352,7 +387,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         ],
                       ),
                     ),
-                    if (isFailed || isPending) ...<Widget>[
+                    if (canRetry) ...<Widget>[
                       const SizedBox(width: 8),
                       SizedBox(
                         height: 32,
@@ -380,7 +415,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                   height: 14,
                                   child: CircularProgressIndicator(strokeWidth: 2),
                                 )
-                              : const Text('Send', style: TextStyle(fontSize: 12)),
+                              : Text(isCaptured ? 'Forward' : 'Send', style: const TextStyle(fontSize: 12)),
                         ),
                       ),
                     ],
@@ -392,5 +427,79 @@ class _HomeScreenState extends State<HomeScreen> {
         },
       ),
     );
+  }
+
+  Future<void> _runWebhookTest(AppController controller) async {
+    final String endpoint = _endpointController.text.trim();
+    if (endpoint.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please enter an API Endpoint URL first.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    setState(() => _testingWebhook = true);
+    try {
+      final Map<String, dynamic> result = await controller.testWebhookDelivery(
+        customEndpoint: endpoint,
+        customSecret: _secretController.text,
+      );
+
+      if (!mounted) return;
+
+      final bool success = result['success'] == true;
+      showDialog<void>(
+        context: context,
+        builder: (BuildContext ctx) => AlertDialog(
+          title: Row(
+            children: <Widget>[
+              Icon(
+                success ? Icons.check_circle : Icons.error,
+                color: success ? Colors.green : Colors.red,
+              ),
+              const SizedBox(width: 8),
+              Text(success ? 'Webhook Connected!' : 'Webhook Test Failed'),
+            ],
+          ),
+          content: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                Text(result['message'] as String? ?? ''),
+                if (result['responseBody'] != null) ...<Widget>[
+                  const SizedBox(height: 10),
+                  const Text('Response Body:', style: TextStyle(fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 4),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade100,
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      result['responseBody'].toString(),
+                      style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _testingWebhook = false);
+    }
   }
 }

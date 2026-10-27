@@ -2,6 +2,7 @@ class QueuedSms {
   QueuedSms({
     required this.id,
     required this.sender,
+    this.rawSender,
     required this.messageBody,
     required this.amount,
     required this.transactionId,
@@ -21,6 +22,7 @@ class QueuedSms {
 
   final String id;
   final String sender;
+  final String? rawSender;
   final String messageBody;
   final double amount;
   final String transactionId;
@@ -43,6 +45,7 @@ class QueuedSms {
     return <String, Object?>{
       'id': id,
       'sender': sender,
+      'raw_sender': rawSender,
       'message_body': messageBody,
       'amount': amount,
       'transaction_id': transactionId,
@@ -65,6 +68,7 @@ class QueuedSms {
     return QueuedSms(
       id: map['id']! as String,
       sender: map['sender']! as String,
+      rawSender: map['raw_sender'] as String?,
       messageBody: map['message_body']! as String,
       amount: (map['amount']! as num).toDouble(),
       transactionId: map['transaction_id']! as String,
@@ -94,6 +98,7 @@ class QueuedSms {
     return QueuedSms(
       id: id,
       sender: sender,
+      rawSender: rawSender,
       messageBody: messageBody,
       amount: amount,
       transactionId: transactionId,

@@ -282,6 +282,25 @@ class MainActivity : FlutterActivity() {
 						}
 					}
 
+					"enqueueTestSms" -> {
+						try {
+							val sender = call.argument<String>("sender")?.trim().orEmpty().ifEmpty { "bKash" }
+							val body = call.argument<String>("body")?.trim().orEmpty()
+							val timestamp = System.currentTimeMillis()
+							if (body.isBlank()) {
+								result.success(false)
+								return@setMethodCallHandler
+							}
+							val enqueued = SmsQueueStore.enqueue(this, sender, body, timestamp, true)
+							if (enqueued) {
+								NativeWorkScheduler.triggerImmediate(this)
+							}
+							result.success(enqueued)
+						} catch (e: Exception) {
+							result.error("TEST_ENQUEUE_ERROR", e.message, null)
+						}
+					}
+
 					else -> result.notImplemented()
 				}
 			}
